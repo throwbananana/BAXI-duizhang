@@ -1,0 +1,35 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.exe
+*.msi
+
+# Local runtime databases and state
+*.db
+*.sqlite
+*.sqlite3
+danfe_batch_gui_settings.ini
+danfe_data_autosave.json
+
+# Local analysis/exports
+preview_export_*.xlsx
+query_result*.xlsx
+reconciliation_results_*.xlsx
+reconciliation_results/
+
+# Logs
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
