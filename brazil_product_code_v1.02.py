@@ -157,6 +157,81 @@ def safe_parse_date_to_date(date_str):
     dt = safe_parse_date(date_str)
     return dt.date() if dt else None
 
+SUMMARY_ROW_ROLE = "SUMMARY"
+_FILTER_EXPR_ALLOWED_RE = re.compile(r'^[\d\.,\+\-\*\/\(\)\s]+$')
+_FILTER_EXPR_NUMBER_RE = re.compile(r'\d[\d\.,]*')
+
+
+def is_summary_item(item) -> bool:
+    """判断单元格是否属于汇总行。"""
+    if not item:
+        return False
+    if item.data(Qt.UserRole) == SUMMARY_ROW_ROLE:
+        return True
+
+    text = item.text().strip()
+    return text.startswith("汇总 (") or text.startswith("汇 (")
+
+
+def is_summary_row(table: QTableWidget, row: int) -> bool:
+    """判断某一行是否为汇总行（兼容 role/text 双判定）。"""
+    if table is None or row < 0 or row >= table.rowCount():
+        return False
+
+    first_item = table.item(row, 0)
+    if is_summary_item(first_item):
+        return True
+
+    for c in range(table.columnCount()):
+        item = table.item(row, c)
+        if item and item.data(Qt.UserRole) == SUMMARY_ROW_ROLE:
+            return True
+    return False
+
+
+def parse_filter_numeric_value(raw_value):
+    """将筛选输入或单元格文本解析成数值，兼容巴西/美式金额与百分号。"""
+    if raw_value is None:
+        return None
+
+    text = str(raw_value).strip()
+    if not text:
+        return None
+
+    text = text.replace('％', '%')
+    if text.endswith('%'):
+        text = text[:-1].strip()
+
+    value = br_to_float(text)
+    if value is not None:
+        return value
+
+    fallback = text.replace(',', '').replace(' ', '')
+    if not fallback:
+        return None
+
+    try:
+        return float(fallback)
+    except Exception:
+        return None
+
+
+def normalize_filter_expression(expr_str: str) -> str:
+    """将带巴西金额格式的公式标准化为 Python 可安全解析的表达式。"""
+    expr_str = str(expr_str).strip()
+    if not _FILTER_EXPR_ALLOWED_RE.match(expr_str):
+        raise ValueError("Unsafe characters in expression")
+
+    def _replace_numeric_token(match):
+        token = match.group(0)
+        parsed = parse_filter_numeric_value(token)
+        if parsed is None:
+            raise ValueError(f"Invalid numeric literal: {token}")
+        return repr(float(parsed))
+
+    return _FILTER_EXPR_NUMBER_RE.sub(_replace_numeric_token, expr_str)
+
+
 def check_filter_match(val_str, criterion):
     """
     检查值是否符合筛选条件 (支持 > < >= <= = != 运算符及简单计算式)
@@ -178,16 +253,14 @@ def check_filter_match(val_str, criterion):
     if op_match:
         op, expr_str = op_match.groups()
         try:
-            # 尝试解析单元格数值 (移除千位符等)
-            clean_val = val_str.replace(',', '').replace('R$', '').replace('¥', '').replace(' ', '')
-            if not clean_val: return False
-            cell_val = float(clean_val)
-            
+            cell_val = parse_filter_numeric_value(val_str)
+            if cell_val is None:
+                return False
+
             # Evaluate expression safely
-            # 1. Allow only safe chars
-            if not re.match(r'^[\d\.\+\-\*\/\(\)\s]+$', expr_str):
-                raise ValueError("Unsafe characters in expression")
-            
+            # 1. Normalize numeric literals so BR/US formats both work
+            normalized_expr = normalize_filter_expression(expr_str)
+
             # 2. Safe arithmetic parsing (avoid eval)
             import ast
 
@@ -213,7 +286,7 @@ def check_filter_match(val_str, criterion):
                     return left / right
                 raise ValueError("Unsupported expression")
 
-            parsed = ast.parse(expr_str, mode='eval')
+            parsed = ast.parse(normalized_expr, mode='eval')
             target_val = float(_safe_eval(parsed))
             
             if op == '>': return cell_val > target_val
@@ -446,12 +519,11 @@ class FilterHeader(QHeaderView):
         has_empty = False
         view = self.parent()
         if isinstance(view, QTableWidget):
-            # 从第1行开始遍历，排除汇总行 (汇总行 data(Qt.UserRole) == "SUMMARY")
             for r in range(view.rowCount()):
-                item = view.item(r, logicalIndex)
-                if item and item.data(Qt.UserRole) == "SUMMARY":
+                if is_summary_row(view, r):
                     continue
-                
+
+                item = view.item(r, logicalIndex)
                 txt = item.text().strip() if item else ""
                 if not txt:
                     has_empty = True
@@ -547,9 +619,17 @@ class FilterHeader(QHeaderView):
                 del self._filters[logicalIndex]
                 self.filterChanged.emit()
         elif action == sort_asc:
-            view.sortItems(logicalIndex, Qt.AscendingOrder)
+            top_level = view.window() if isinstance(view, QTableWidget) else None
+            if hasattr(top_level, "sort_with_summary"):
+                top_level.sort_with_summary(view, logicalIndex, Qt.AscendingOrder)
+            elif isinstance(view, QTableWidget):
+                view.sortItems(logicalIndex, Qt.AscendingOrder)
         elif action == sort_desc:
-            view.sortItems(logicalIndex, Qt.DescendingOrder)
+            top_level = view.window() if isinstance(view, QTableWidget) else None
+            if hasattr(top_level, "sort_with_summary"):
+                top_level.sort_with_summary(view, logicalIndex, Qt.DescendingOrder)
+            elif isinstance(view, QTableWidget):
+                view.sortItems(logicalIndex, Qt.DescendingOrder)
 
     def get_filter_text(self, col):
         return self._filters.get(col, "")
@@ -605,10 +685,8 @@ def export_qtable(table: QTableWidget, parent: QWidget, filename_prefix: str = "
             rows = []
             for r in range(table.rowCount()):
                 if table.isRowHidden(r): continue
-                first_item = table.item(r, 0)
-                if first_item:
-                    if first_item.data(Qt.UserRole) == "SUMMARY" or first_item.text().startswith("汇 ("):
-                        continue
+                if is_summary_row(table, r):
+                    continue
                 
                 row_data = []
                 for c in range(table.columnCount()):
@@ -675,12 +753,8 @@ def export_multiple_qtables(tables_info: list, parent: QWidget, filename_prefix:
             excel_row_idx = 2
             for r in range(table.rowCount()):
                 if table.isRowHidden(r): continue
-                
-                # 排除汇总行
-                first_item = table.item(r, 0)
-                if first_item:
-                    if first_item.data(Qt.UserRole) == "SUMMARY" or first_item.text().startswith("汇 ("):
-                        continue
+                if is_summary_row(table, r):
+                    continue
                 
                 for c in range(table.columnCount()):
                     widget = table.cellWidget(r, c)
@@ -11621,24 +11695,18 @@ class MainWindow(QMainWindow):
 
     def update_summary_row(self, table: QTableWidget):
         """更新表格第一行的汇总数 (优化版：确保唯一并处于顶端)"""
-        if table.rowCount() == 0:
+        if table is None:
             return
 
         # 临时禁用排序，防止操作中行位置变动
         was_sorting = table.isSortingEnabled()
         table.setSortingEnabled(False)
-        
+
         try:
             # 1. 查找并清理所有现有的汇总行
             r = 0
             while r < table.rowCount():
-                item = table.item(r, 0)
-                is_summary = False
-                if item:
-                    if item.data(Qt.UserRole) == "SUMMARY" or item.text().startswith("汇 ("):
-                        is_summary = True
-                
-                if is_summary:
+                if is_summary_row(table, r):
                     table.removeRow(r)
                 else:
                     r += 1
@@ -11647,53 +11715,53 @@ class MainWindow(QMainWindow):
             table.insertRow(0)
             for c in range(table.columnCount()):
                 item = QTableWidgetItem()
-                item.setData(Qt.UserRole, "SUMMARY")
+                item.setData(Qt.UserRole, SUMMARY_ROW_ROLE)
                 item.setBackground(QColor(255, 255, 224)) # Light Yellow
                 font = QFont()
                 font.setBold(True)
                 item.setFont(font)
-                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable) 
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 table.setItem(0, c, item)
-            
+
             # 3. 统计数据
             cols = table.columnCount()
             totals = {}
             visible_count = 0
             rows = table.rowCount()
-            
+
             # 识别数值列
             numeric_cols = set()
-            rows_to_check = min(rows, 100) 
+            rows_to_check = min(rows, 100)
             for r in range(rows_to_check):
-                 if table.isRowHidden(r) or r == 0: continue
-                 for c in range(cols):
-                     if c in numeric_cols: continue
-                     item = table.item(r, c)
-                     if item:
-                         raw_text = item.text().strip()
-                         # 排除明显的 ID 类长数字 (如 CNPJ, 访问码等)
-                         # 巴西 CNPJ 14位，访问码 44位。如果纯数字长度超过 10 且不是金额格式，需警惕
-                         digits_only = re.sub(r'\D', '', raw_text)
-                         if len(digits_only) >= 10:
-                             # 进一步检查：金额通常有逗号或点。ID 通常没有，或者点的位置不规律
-                             if ',' not in raw_text and '.' not in raw_text:
-                                 continue
-                             # 如果长度达到 14 (CNPJ) 或 44 (Access Key)，极大概率不是金额
-                             if len(digits_only) in [14, 44]:
-                                 continue
-                                 
-                         val = br_to_float(raw_text)
-                         # 增加合理数值范围判定 (防止错把流水号当金额)
-                         # 巴西最大单笔发票金额极少超过 10 亿 (1e9)
-                         if val is not None and abs(val) < 1e9: 
-                             numeric_cols.add(c)
-            
+                if table.isRowHidden(r) or is_summary_row(table, r):
+                    continue
+                for c in range(cols):
+                    if c in numeric_cols:
+                        continue
+                    item = table.item(r, c)
+                    if item:
+                        raw_text = item.text().strip()
+                        # 排除明显的 ID 类长数字 (如 CNPJ, 访问码等)
+                        digits_only = re.sub(r'\D', '', raw_text)
+                        if len(digits_only) >= 10:
+                            if ',' not in raw_text and '.' not in raw_text:
+                                continue
+                            if len(digits_only) in [14, 44]:
+                                continue
+
+                        val = br_to_float(raw_text)
+                        # 防止错把流水号当金额
+                        if val is not None and abs(val) < 1e9:
+                            numeric_cols.add(c)
+
             for r in range(rows):
-                if table.isRowHidden(r) or r == 0: continue
+                if table.isRowHidden(r) or is_summary_row(table, r):
+                    continue
                 visible_count += 1
                 for c in numeric_cols:
                     item = table.item(r, c)
-                    if not item: continue
+                    if not item:
+                        continue
                     val = br_to_float(item.text())
                     # 再次校验单行金额合理性：单行金额不应超过 1 亿
                     if val is not None and abs(val) < 1e8:
@@ -11702,11 +11770,12 @@ class MainWindow(QMainWindow):
             # 4. 更新文本 (汇总和合计)
             for c in range(cols):
                 item = table.item(0, c)
-                if not item: continue
-                
+                if not item:
+                    continue
+
                 header_item = table.horizontalHeaderItem(c)
                 header_text = header_item.text() if header_item else ""
-                
+
                 # Check if this column should show Average instead of Sum
                 show_avg = False
                 avg_keywords = ["单价", "PRICE", "UNIT", "PREÇO", "AVERAGE", "MÉDIA", "RATE", "TAXA", "进度", "PROGRESS", "%"]
@@ -11719,22 +11788,20 @@ class MainWindow(QMainWindow):
                 elif c in totals:
                     val = totals[c]
                     avg = val / visible_count if visible_count > 0 else 0
-                    
-                    # 安全限额检查：如果数值过大，可能是由于 OCR 错误或解析错误，显示 [ERR]
+
                     if abs(val) > 1e15:
                         item.setText("数据异常")
                     else:
-                        # 格式化为巴西货币格式
                         sum_txt = f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                         avg_txt = f"{avg:,.4f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                        
+
                         if show_avg:
-                            item.setText(avg_txt) # Show Average
+                            item.setText(avg_txt)
                             item.setToolTip(f"平均: {avg_txt}\n合计: {sum_txt}")
                         else:
-                            item.setText(sum_txt) # Show Sum
+                            item.setText(sum_txt)
                             item.setToolTip(f"合计: {sum_txt}\n平均: {avg_txt}")
-                    
+
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     item.setText("")
@@ -11747,27 +11814,26 @@ class MainWindow(QMainWindow):
         header = table.horizontalHeader()
         if not isinstance(header, FilterHeader):
             return
-            
+
         filters = header._filters
         rows = table.rowCount()
-        
-        # 从第1行开始 (第0行通常是汇总行)
+
         for r in range(rows):
+            if is_summary_row(table, r):
+                table.setRowHidden(r, False)
+                continue
+
             visible = True
             for c, criterion in filters.items():
                 item = table.item(r, c)
                 val = item.text().strip() if item else ""
-                
+
                 if not check_filter_match(val, criterion):
                     visible = False
                     break
-            
+
             table.setRowHidden(r, not visible)
-            
-        # 始终确保汇总行可见
-        if rows > 0:
-            table.setRowHidden(0, False)
-            
+
         self.update_summary_row(table)
 
     def on_header_clicked(self, logicalIndex):
@@ -11792,21 +11858,17 @@ class MainWindow(QMainWindow):
 
     def sort_with_summary(self, table: QTableWidget, col: int, order: Qt.SortOrder):
         """Sorts table but keeps summary row at top"""
-        # 1. Remove Summary Row
-        summary_row = -1
-        summary_items = []
-        if table.rowCount() > 0:
-            first = table.item(0, 0)
-            if first and first.data(Qt.UserRole) == "SUMMARY":
-                summary_row = 0
-                # Take items to preserve them? Or just remove and regenerate?
-                # Regenerate is safer and easier.
-                table.removeRow(0)
-        
-        # 2. Sort
+        if table is None:
+            return
+
+        r = 0
+        while r < table.rowCount():
+            if is_summary_row(table, r):
+                table.removeRow(r)
+            else:
+                r += 1
+
         table.sortItems(col, order)
-        
-        # 3. Add Summary Row back
         self.update_summary_row(table)
 
     def open_settings(self):
