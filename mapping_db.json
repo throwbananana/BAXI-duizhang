@@ -2,171 +2,243 @@
   "products": {
     "2100002017339": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 1KG 0.8MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 1KG 0.8MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017346": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 1KG 1.0MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 1KG 1.0MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017353": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 5KG 0.8MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 5KG 0.8MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017360": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 5KG 1.0MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 5KG 1.0MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017377": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 15KG 0.8MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 15KG 0.8MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017384": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 15KG 1.0MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 15KG 1.0MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017445": {
       "std_code": "",
-      "std_name": "0,00 ER70S-6 15KG 1.2MM FIO DE SOLDA MIG"
+      "std_name": "ER70S-6 15KG 1.2MM FIO DE SOLDA MIG",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017452": {
       "std_code": "",
-      "std_name": "0,00 1200*2 50L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , 50L, 1902RPM, 120PSI, 220V"
+      "std_name": "1200*2 50L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , 50L, 1902RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017469": {
       "std_code": "",
-      "std_name": "0,00 BM-1902-25L 127V COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 120PSI, 25L"
+      "std_name": "BM-1902-25L 127V COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 120PSI, 25L",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017476": {
       "std_code": "",
-      "std_name": "0,00 550*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , 120PSI, 50L"
+      "std_name": "550*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , 120PSI, 50L",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017483": {
       "std_code": "",
-      "std_name": "0,00 750-25L COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 120PSI, 25L"
+      "std_name": "750-25L COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 120PSI, 25L",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017490": {
       "std_code": "",
-      "std_name": "0,00 1500W-4 CABEcOTE DE USO EXCLUSIVO NOS COMPRESSORES COMPBRASIL"
+      "std_name": "1500W-4 CABEcOTE DE USO EXCLUSIVO NOS COMPRESSORES COMPBRASIL",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017506": {
       "std_code": "",
-      "std_name": "0,00 AK-CUT40 COMP - MARCA AK-TEK USK, TENSÃO: BIVOLT, FREQUENCIA: 60HZ, FAIXA DE AJUSTE: 23A - 40A CAPACIDADE DE CORTE: 12MM Desenvolvido Por (11) 95446-3125"
+      "std_name": "AK-CUT40 COMP - MARCA AK-TEK USK, TENSÃO: BIVOLT, FREQUENCIA: 60HZ, FAIXA DE AJUSTE: 23A - 40A CAPACIDADE DE CORTE: 12MM",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017179": {
       "std_code": "",
-      "std_name": "0,00 E71T-GS ARAME DE SOLDA MIG, SEM GÁS"
+      "std_name": "E71T-GS ARAME DE SOLDA MIG, SEM GÁS",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017186": {
       "std_code": "",
-      "std_name": "0,00 E71T-1C ARAME DE SOLDA MIG, SEM GÁS"
+      "std_name": "E71T-1C ARAME DE SOLDA MIG, SEM GÁS",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017193": {
       "std_code": "",
-      "std_name": "0,00 BM-1902-25L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 1902RPM, 120PSI, 220V"
+      "std_name": "BM-1902-25L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 1902RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017209": {
       "std_code": "",
-      "std_name": "0,00 550*2- 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V"
+      "std_name": "550*2- 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017216": {
       "std_code": "",
-      "std_name": "0,00 PARTES E PEÇAS DE REPOSIcÃO DE USO EXCLUSIVO EM COMPRESSORES DE AR COMPBRASIL Desenvolvido Por (11) 95446-3125"
+      "std_name": "PARTES E PEÇAS DE REPOSIcÃO DE USO EXCLUSIVO EM COMPRESSORES DE AR COMPBRASIL",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002016998": {
       "std_code": "",
-      "std_name": "CABEcOTE DE USO EXCLUSIVO NO COMPRESSOR DE AR COMPBRASIL - 1500W-4 Desenvolvido Por (11) 95446-3125"
+      "std_name": "CABEcOTE DE USO EXCLUSIVO NO COMPRESSOR DE AR COMPBRASIL - 1500W-4",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017285": {
       "std_code": "",
-      "std_name": "BM-1902 25L 127V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W Desenvolvido Por (11) 95446-3125"
+      "std_name": "BM-1902 25L 127V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002016745": {
       "std_code": "",
-      "std_name": "0,00 1100*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , COM RODAS, 1100W, 50L, 1725RPM, 120PSI, 220V Desenvolvido Por (11) 95446-3125"
+      "std_name": "1100*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , COM RODAS, 1100W, 50L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017414": {
       "std_code": "",
-      "std_name": "PEÇAS DE REPOSIÇÃO EXCLUSIVA NOS COMPRESSORES Desenvolvido Por (11) 95446-3125"
+      "std_name": "PEÇAS DE REPOSIÇÃO EXCLUSIVA NOS COMPRESSORES",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017230": {
       "std_code": "",
-      "std_name": "0,00 1200*2- 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V Desenvolvido Por (11) 95446-3125"
+      "std_name": "1200*2- 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017049": {
       "std_code": "",
-      "std_name": "REF.: 1100*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 50L, 2,2HP, 3400RPM, 120PSI, 220V"
+      "std_name": "REF.: 1100*2 50L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 50L, 2,2HP, 3400RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002016776": {
       "std_code": "",
-      "std_name": "1200- 8L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1725RPM, 120PSI, 220V"
+      "std_name": "1200- 8L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "6973858620024": {
       "std_code": "",
-      "std_name": "COMPRESSOR DE AR SEM OLEO 550*2-50L COMPBRASIL 220V Desenvolvido Por (11) 95446-3125"
+      "std_name": "COMPRESSOR DE AR SEM OLEO 550*2-50L COMPBRASIL 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017032": {
       "std_code": "",
-      "std_name": "0,00 1100 8L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1800RPM, 116PSI Desenvolvido Por (11) 95446-3125"
+      "std_name": "1100 8L 220V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1800RPM, 116PSI",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017162": {
       "std_code": "",
-      "std_name": "COMP750W 220V CABECOTE AR DIRETO DE USO EXCLUSIVO EM COMPRESSOR DE AR COMPBRASIL Desenvolvido Por (11) 95446-3125"
-    },
-    "129671242116": {
-      "std_code": "",
-      "std_name": "TRANSPORTADOR/VOLUMES TRANSPORTADOS Nome/Razao Social Frete por Conta Codigo ANTT Endereco Municipio UF Placa UF CPF/CNPJ Inscricao Estadual Quantidade Especie Marca Numeracao Peso Bruto Peso Liquido LANDSLOG EXPREESS LTDA 1 - Contratação do Frete por conta do Destinatário (FOB)"
+      "std_name": "COMP750W 220V CABECOTE AR DIRETO DE USO EXCLUSIVO EM COMPRESSOR DE AR COMPBRASIL",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017223": {
       "std_code": "",
-      "std_name": "0,00 550/4-220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 1725RPM, 120PSI, 220V"
+      "std_name": "550/4-220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017308": {
       "std_code": "",
-      "std_name": "1500 50L -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 120 PSI Desenvolvido Por (11) 95446-3125"
+      "std_name": "1500 50L -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 120 PSI",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017247": {
       "std_code": "",
-      "std_name": "0,00 BM-1902 25L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 1500RPM, 120PSI, 220V"
+      "std_name": "BM-1902 25L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 1500RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017254": {
       "std_code": "",
-      "std_name": "0,00 1500 - 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V"
+      "std_name": "1500 - 50L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 50L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017261": {
       "std_code": "",
-      "std_name": "0,00 550/4- 45L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 45L, 0,748HP, 120PSI, 220V"
+      "std_name": "550/4- 45L - 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 45L, 0,748HP, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017278": {
       "std_code": "",
-      "std_name": "0,00 PARTES E PEÇAS DE USO EXCLUSIVO NO COMPRESSORES DE AR COMPBRASIL Desenvolvido Por (11) 95446-3125"
+      "std_name": "PARTES E PEÇAS DE USO EXCLUSIVO NO COMPRESSORES DE AR COMPBRASIL",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017292": {
       "std_code": "",
-      "std_name": "0,00 BM-1902 25L 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W"
+      "std_name": "BM-1902 25L 220V -COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017315": {
       "std_code": "",
-      "std_name": "0,00 550/4 220V-COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W"
+      "std_name": "550/4 220V-COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017322": {
       "std_code": "",
-      "std_name": "0,00 750/4 220V-COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W Desenvolvido Por (11) 95446-3125"
+      "std_name": "750/4 220V-COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL , 25L, 2HP, 1500W",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017018": {
       "std_code": "",
-      "std_name": "CABEcOTE DE USO EXCLUSIVO NO COMPRESSOR DE AR COMPBRASIL - COMP 750W 220V Desenvolvido Por (11) 95446-3125"
-    },
-    "116758186112": {
-      "std_code": "",
-      "std_name": "0 Desenvolvido Por (11) 95446- DADOS ADICIONAIS InformaÇÕES Complementares Reservado ao Fisco"
+      "std_name": "CABEcOTE DE USO EXCLUSIVO NO COMPRESSOR DE AR COMPBRASIL - COMP 750W 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002017025": {
       "std_code": "",
-      "std_name": "1100 8L 127V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1800RPM, 116PSI, 127V"
+      "std_name": "1100 8L 127V - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 8L, 1800RPM, 116PSI, 127V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     },
     "2100002016752": {
       "std_code": "",
-      "std_name": "1200 25L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 25L, 1725RPM, 120PSI, 220V Desenvolvido Por (11) 95446-3125"
+      "std_name": "1200 25L - COMPRESSOR DE AR MARCA COMPBRASIL , PORTÁTIL 1100W, 25L, 1725RPM, 120PSI, 220V",
+      "status": "candidate",
+      "updated_at": "2026-03-20 02:19:44"
     }
   },
   "partners": {

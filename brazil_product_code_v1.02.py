@@ -796,44 +796,291 @@ def export_multiple_qtables(tables_info: list, parent: QWidget, filename_prefix:
 
 # --- Mapping System ---
 class MappingManager:
-    """管理产品和往来单位的标准化映射"""
+    """管理产品和往来单位的标准化映射，并在入库前做基础清洗。"""
+
+    PRODUCT_METADATA_FIELDS = (
+        "status",
+        "source",
+        "confidence",
+        "updated_at",
+        "reviewed_by",
+        "sample_text",
+        "notes",
+    )
+    PRODUCT_SECTION_MARKERS = (
+        "TRANSPORTADOR/VOLUMES TRANSPORTADOS",
+        "DADOS ADICIONAIS",
+        "INFORMACOES COMPLEMENTARES",
+        "INFORMAÇÕES COMPLEMENTARES",
+        "RESERVADO AO FISCO",
+        "NOME/RAZAO SOCIAL",
+        "NOME/RAZÃO SOCIAL",
+    )
+    PRODUCT_TAIL_MARKERS = (
+        "DESENVOLVIDO POR",
+        "HTTP://",
+        "HTTPS://",
+        "WWW.",
+    )
+    PRODUCT_MONEY_RE = re.compile(
+        r'^\s*(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}\s*$'
+    )
+    PRODUCT_PRICE_PREFIX_RE = re.compile(
+        r'^\s*(?:R\$\s*)?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2}(?:\s*[-–—:]?\s*|\s+)'
+    )
+    PRODUCT_PHONE_RE = re.compile(r'\(?\d{2}\)?\s*\d{4,5}-?\d{4}')
+    PRODUCT_ONLY_DIGITS_RE = re.compile(r'^\d+$')
+    PRODUCT_CODE_TEXT_RE = re.compile(r'[^A-Z0-9._\-/]')
+
     def __init__(self, filepath="mapping_db.json"):
         self.filepath = filepath
-        # data structure:
-        # {
-        #   "products": { "orig_code": {"std_code": "...", "std_name": "..."} },
-        #   "partners": { "clean_cnpj_or_name": "Standard Name" }        # }
         self.data = {"products": {}, "partners": {}}
+        self.audit = {"dropped_products": [], "dropped_partners": []}
         self.load()
 
+    @staticmethod
+    def _clean_text(value) -> str:
+        if value is None:
+            return ""
+        text = str(value).replace(" ", " ").replace("　", " ")
+        text = text.replace("\r", " ").replace("\n", " ")
+        return re.sub(r'\s+', ' ', text).strip()
+
+    @classmethod
+    def _looks_like_monetary_text(cls, value) -> bool:
+        text = cls._clean_text(value)
+        if not text:
+            return False
+        if cls.PRODUCT_MONEY_RE.match(text):
+            return True
+        return bool(re.match(r'^\s*(?:R\$\s*)?\d+[\.,]\d{2}\s*$', text))
+
+    @classmethod
+    def _normalize_product_key(cls, code) -> str:
+        if code is None:
+            return ""
+        return re.sub(r'\D+', '', str(code))
+
+    @classmethod
+    def _normalize_product_code_value(cls, value) -> str:
+        text = cls._clean_text(value)
+        if not text:
+            return ""
+        if cls._looks_like_monetary_text(text):
+            return ""
+        upper = text.upper()
+        if re.search(r'[A-Z]', upper):
+            upper = cls.PRODUCT_CODE_TEXT_RE.sub('', upper)
+            upper = re.sub(r'-{2,}', '-', upper).strip('-._/')
+            return upper
+        digits = re.sub(r'\D+', '', upper)
+        if not digits:
+            return ""
+        if len(digits) > 32:
+            return ""
+        return digits
+
+    @classmethod
+    def _trim_product_tail(cls, text: str) -> str:
+        cleaned = text
+        upper = cleaned.upper()
+        cut_positions = []
+        for marker in cls.PRODUCT_SECTION_MARKERS + cls.PRODUCT_TAIL_MARKERS:
+            pos = upper.find(marker)
+            if pos > 0:
+                cut_positions.append(pos)
+        if cut_positions:
+            cleaned = cleaned[:min(cut_positions)].strip(' -–—|;:,')
+        return cleaned.strip()
+
+    @classmethod
+    def _looks_like_product_noise(cls, text: str) -> bool:
+        if not text:
+            return True
+        upper = text.upper()
+        if cls._looks_like_monetary_text(text):
+            return True
+        if cls.PRODUCT_PHONE_RE.search(text) and len(re.sub(r'\D+', '', text)) <= 13:
+            return True
+        if any(marker in upper for marker in cls.PRODUCT_SECTION_MARKERS):
+            return True
+        if 'CONTRATAÇÃO DO FRETE' in upper or 'CONTRATACAO DO FRETE' in upper:
+            return True
+        if cls.PRODUCT_ONLY_DIGITS_RE.match(re.sub(r'\s+', '', text)):
+            return True
+        if not re.search(r'[A-ZÀ-ÿ]', text):
+            return True
+        if len(text) > 220:
+            return True
+        return False
+
+    @classmethod
+    def _clean_product_name_text(cls, value) -> str:
+        text = cls._clean_text(value)
+        if not text:
+            return ""
+
+        prev = None
+        while prev != text:
+            prev = text
+            text = cls.PRODUCT_PRICE_PREFIX_RE.sub('', text).strip()
+            text = re.sub(r'^[\-–—|:;,./\\]+', '', text).strip()
+
+        text = cls._trim_product_tail(text)
+        text = re.sub(r'\s+', ' ', text).strip(' -–—|:;,')
+
+        if cls._looks_like_product_noise(text):
+            return ""
+        return text
+
+    @classmethod
+    def _product_entry_score(cls, entry: dict) -> tuple:
+        return (
+            1 if entry.get('std_code') else 0,
+            1 if entry.get('std_name') else 0,
+            1 if entry.get('status') == 'reviewed' else 0,
+            float(entry.get('confidence') or 0.0),
+            len(entry.get('sample_text') or ''),
+        )
+
+    @classmethod
+    def _merge_product_entries(cls, current: Optional[dict], incoming: Optional[dict]) -> Optional[dict]:
+        if not current:
+            return incoming
+        if not incoming:
+            return current
+        preferred = incoming if cls._product_entry_score(incoming) > cls._product_entry_score(current) else current
+        secondary = current if preferred is incoming else incoming
+        merged = dict(preferred)
+        for field in ('std_code', 'std_name', *cls.PRODUCT_METADATA_FIELDS):
+            if not merged.get(field) and secondary.get(field):
+                merged[field] = secondary.get(field)
+        return merged
+
+    @classmethod
+    def _sanitize_product_entry(
+        cls,
+        key,
+        value,
+        *,
+        keep_incomplete: bool = True,
+        source: Optional[str] = None,
+        status: Optional[str] = None,
+        reviewed_by: Optional[str] = None,
+        confidence: Optional[float] = None,
+        sample_text: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> Tuple[str, Optional[dict], List[str]]:
+        issues: List[str] = []
+        norm_key = cls._normalize_product_key(key)
+        if not norm_key:
+            issues.append('empty_key')
+            return '', None, issues
+
+        raw_entry = value if isinstance(value, dict) else {'std_code': '', 'std_name': value}
+        std_code = cls._normalize_product_code_value(raw_entry.get('std_code', ''))
+        raw_std_name = raw_entry.get('std_name', '')
+        std_name = cls._clean_product_name_text(raw_std_name)
+        if raw_std_name and not std_name:
+            issues.append('std_name_rejected')
+
+        entry = {'std_code': std_code, 'std_name': std_name}
+        for field in cls.PRODUCT_METADATA_FIELDS:
+            val = raw_entry.get(field)
+            if val not in (None, ''):
+                entry[field] = cls._clean_text(val) if isinstance(val, str) else val
+
+        if source not in (None, ''):
+            entry['source'] = cls._clean_text(source)
+        if reviewed_by not in (None, ''):
+            entry['reviewed_by'] = cls._clean_text(reviewed_by)
+        if sample_text not in (None, ''):
+            cleaned_sample = cls._clean_product_name_text(sample_text)
+            if cleaned_sample:
+                entry['sample_text'] = cleaned_sample
+        if notes not in (None, ''):
+            entry['notes'] = cls._clean_text(notes)
+        if confidence not in (None, ''):
+            try:
+                entry['confidence'] = float(confidence)
+            except (TypeError, ValueError):
+                issues.append('invalid_confidence')
+
+        if not entry.get('status'):
+            entry['status'] = status or ('reviewed' if std_code and std_name else 'candidate')
+        elif status not in (None, ''):
+            entry['status'] = status
+
+        entry['updated_at'] = cls._clean_text(entry.get('updated_at')) or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        if not std_code and not std_name:
+            issues.append('empty_payload')
+            if not keep_incomplete:
+                return norm_key, None, issues
+            return norm_key, None, issues
+        return norm_key, entry, issues
+
+    @classmethod
+    def sanitize_legacy_product_mapping(cls, mapping: dict) -> Tuple[dict, dict]:
+        cleaned = {}
+        rejected = {}
+        for raw_key, raw_value in (mapping or {}).items():
+            norm_key = cls._normalize_product_key(raw_key)
+            norm_value = cls._normalize_product_code_value(raw_value)
+            if not norm_key or not norm_value:
+                rejected[str(raw_key)] = raw_value
+                continue
+            if cls._looks_like_monetary_text(raw_key) or cls._looks_like_monetary_text(raw_value):
+                rejected[str(raw_key)] = raw_value
+                continue
+            cleaned[norm_key] = norm_value
+        return cleaned, rejected
+
     def load(self):
+        self.audit = {"dropped_products": [], "dropped_partners": []}
         if os.path.exists(self.filepath):
             try:
                 with open(self.filepath, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
-                    self.data["products"] = loaded.get("products", {})
-                    self.data["partners"] = loaded.get("partners", {})
-                self.normalize_data() # Ensure loaded data is clean
+                self.data["products"] = loaded.get("products", {})
+                self.data["partners"] = loaded.get("partners", {})
             except Exception as e:
                 logging.error(f"Failed to load mappings: {e}")
+                self.data = {"products": {}, "partners": {}}
+        self.normalize_data()
 
     def normalize_data(self):
-        """Clean up keys in the loaded data to ensure they match parser output (digits only)"""
-        # Clean Products
         clean_prods = {}
-        for k, v in self.data["products"].items():
-            clean_k = re.sub(r'\D+', '', k) # only digits
-            if clean_k:
-                clean_prods[clean_k] = v
-        self.data["products"] = clean_prods
-        
-        # Clean Partners (CNPJ keys usually need to be digits, names might be loose)
+        dropped_products = []
+        for raw_key, raw_value in (self.data.get('products') or {}).items():
+            norm_key, entry, issues = self._sanitize_product_entry(raw_key, raw_value)
+            if not norm_key or not entry:
+                dropped_products.append({
+                    'key': str(raw_key),
+                    'value': raw_value,
+                    'issues': issues,
+                })
+                continue
+            clean_prods[norm_key] = self._merge_product_entries(clean_prods.get(norm_key), entry)
+        self.data['products'] = clean_prods
+
         clean_parts = {}
-        for k, v in self.data["partners"].items():
-            clean_k = self._normalize_partner_key(k)
-            if clean_k:
-                clean_parts[clean_k] = v
-        self.data["partners"] = clean_parts
+        dropped_partners = []
+        for raw_key, raw_value in (self.data.get('partners') or {}).items():
+            clean_k = self._normalize_partner_key(raw_key)
+            clean_v = self._clean_text(raw_value)
+            if not clean_k or not clean_v or self._looks_like_monetary_text(clean_v):
+                dropped_partners.append({
+                    'key': str(raw_key),
+                    'value': raw_value,
+                })
+                continue
+            clean_parts[clean_k] = clean_v
+        self.data['partners'] = clean_parts
+        self.audit = {
+            'dropped_products': dropped_products,
+            'dropped_partners': dropped_partners,
+        }
 
     @staticmethod
     def _normalize_partner_key(key: str) -> str:
@@ -850,6 +1097,7 @@ class MappingManager:
         return re.sub(r'\s+', ' ', raw).strip().upper()
 
     def save(self):
+        self.normalize_data()
         try:
             with open(self.filepath, 'w', encoding='utf-8') as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
@@ -857,18 +1105,18 @@ class MappingManager:
             logging.error(f"Failed to save mappings: {e}")
 
     def get_product_std(self, code):
-        """Get standardized info for product code"""
-        if not code: return None
-        # Try exact match first
-        res = self.data["products"].get(code)
-        if res: return res
-        # Try normalized match
-        norm_code = re.sub(r'\D+', '', str(code))
-        return self.data["products"].get(norm_code)
+        if not code:
+            return None
+        res = self.data['products'].get(str(code))
+        if res:
+            return res
+        norm_code = self._normalize_product_key(code)
+        if not norm_code:
+            return None
+        return self.data['products'].get(norm_code)
 
     @staticmethod
     def _normalize_name_for_match(name: str) -> str:
-        """Normalize product name for robust similarity matching."""
         if not name:
             return ""
         s = unicodedata.normalize("NFKD", str(name))
@@ -878,18 +1126,21 @@ class MappingManager:
         return re.sub(r'\s+', ' ', s).strip()
 
     def find_best_product_name_match(self, description, threshold=0.8):
-        """Find best standardized product by description similarity."""
         if not description:
+            return None
+
+        cleaned_description = self._clean_product_name_text(description) or self._clean_text(description)
+        if not cleaned_description:
             return None
 
         best = None
         highest_score = 0.0
-        norm_desc = self._normalize_name_for_match(description)
-        for k, v in self.data.get("products", {}).items():
-            std_name = v.get("std_name", "")
+        norm_desc = self._normalize_name_for_match(cleaned_description)
+        for key, value in self.data.get('products', {}).items():
+            std_name = self._clean_product_name_text(value.get('std_name', ''))
             if not std_name:
                 continue
-            score_raw = calculate_similarity(description, std_name)
+            score_raw = calculate_similarity(cleaned_description, std_name)
             if norm_desc:
                 score_norm = calculate_similarity(norm_desc, self._normalize_name_for_match(std_name))
                 score = max(score_raw, score_norm)
@@ -898,10 +1149,11 @@ class MappingManager:
             if score > highest_score:
                 highest_score = score
                 best = {
-                    "source_key": k,
-                    "std_code": v.get("std_code", ""),
-                    "std_name": std_name,
-                    "score": score
+                    'source_key': key,
+                    'std_code': value.get('std_code', ''),
+                    'std_name': std_name,
+                    'score': score,
+                    'status': value.get('status', ''),
                 }
 
         if highest_score >= threshold:
@@ -919,77 +1171,115 @@ class MappingManager:
         code_candidate = None
         if code_std:
             code_candidate = {
-                "std_code": code_std.get("std_code", ""),
-                "std_name": code_std.get("std_name", ""),
-                "score": 1.0
+                'std_code': code_std.get('std_code', ''),
+                'std_name': code_std.get('std_name', ''),
+                'score': 1.0,
             }
 
         def same_target(a, b):
             if not a or not b:
                 return False
-            a_code = str(a.get("std_code", "")).strip()
-            b_code = str(b.get("std_code", "")).strip()
+            a_code = str(a.get('std_code', '')).strip()
+            b_code = str(b.get('std_code', '')).strip()
             if a_code and b_code and a_code == b_code:
                 return True
-            a_name = self._normalize_name_for_match(a.get("std_name", ""))
-            b_name = self._normalize_name_for_match(b.get("std_name", ""))
+            a_name = self._normalize_name_for_match(a.get('std_name', ''))
+            b_name = self._normalize_name_for_match(b.get('std_name', ''))
             return bool(a_name and b_name and a_name == b_name)
 
         if code_candidate and name_std:
             if same_target(code_candidate, name_std):
                 return {
-                    "status": "AUTO_PASS",
-                    "code_candidate": code_candidate,
-                    "name_candidate": name_std
+                    'status': 'AUTO_PASS',
+                    'code_candidate': code_candidate,
+                    'name_candidate': name_std,
                 }
             return {
-                "status": "CONFLICT",
-                "code_candidate": code_candidate,
-                "name_candidate": name_std
+                'status': 'CONFLICT',
+                'code_candidate': code_candidate,
+                'name_candidate': name_std,
             }
         if code_candidate:
             return {
-                "status": "CODE_ONLY",
-                "code_candidate": code_candidate,
-                "name_candidate": None
+                'status': 'CODE_ONLY',
+                'code_candidate': code_candidate,
+                'name_candidate': None,
             }
         if name_std:
             return {
-                "status": "NAME_ONLY",
-                "code_candidate": None,
-                "name_candidate": name_std
+                'status': 'NAME_ONLY',
+                'code_candidate': None,
+                'name_candidate': name_std,
             }
-        return {"status": "UNMAPPED", "code_candidate": None, "name_candidate": None}
+        return {'status': 'UNMAPPED', 'code_candidate': None, 'name_candidate': None}
 
     def get_product_smart(self, code, description, threshold=0.8):
         std = self.get_product_std(code)
-        if std: return std
+        if std:
+            return std
         best_match = self.find_best_product_name_match(description, threshold=threshold)
         if best_match:
             return {
-                "std_code": best_match.get("std_code", ""),
-                "std_name": best_match.get("std_name", "")
+                'std_code': best_match.get('std_code', ''),
+                'std_name': best_match.get('std_name', ''),
             }
         return None
 
-    def set_product_std(self, code, std_code, std_name):
-        # Always store normalized key
-        norm_code = re.sub(r'\D+', '', str(code))
+    def set_product_std(
+        self,
+        code,
+        std_code,
+        std_name,
+        *,
+        source: str = 'manual',
+        status: Optional[str] = None,
+        reviewed_by: str = '',
+        confidence: Optional[float] = None,
+        sample_text: str = '',
+        notes: str = '',
+    ):
+        current = self.get_product_std(code) or {}
+        _, entry, _ = self._sanitize_product_entry(
+            code,
+            {
+                'std_code': std_code,
+                'std_name': std_name,
+                'status': current.get('status', ''),
+                'source': current.get('source', ''),
+                'confidence': current.get('confidence', ''),
+                'updated_at': current.get('updated_at', ''),
+                'reviewed_by': current.get('reviewed_by', ''),
+                'sample_text': current.get('sample_text', ''),
+                'notes': current.get('notes', ''),
+            },
+            source=source,
+            status=status,
+            reviewed_by=reviewed_by,
+            confidence=confidence if confidence is not None else current.get('confidence'),
+            sample_text=sample_text or current.get('sample_text', ''),
+            notes=notes or current.get('notes', ''),
+        )
+        norm_code = self._normalize_product_key(code)
+        if norm_code and entry:
+            self.data['products'][norm_code] = self._merge_product_entries(current, entry)
+            return True
         if norm_code:
-            self.data["products"][norm_code] = {"std_code": std_code, "std_name": std_name}
+            self.data['products'].pop(norm_code, None)
+        return False
+
     def get_partner_std(self, key):
-        """Get standardized name for CNPJ or Name"""
         if key is None:
             return None
-        direct = self.data["partners"].get(key)
+        direct = self.data['partners'].get(key)
         if direct:
             return direct
-        return self.data["partners"].get(self._normalize_partner_key(key))
+        return self.data['partners'].get(self._normalize_partner_key(key))
 
     def set_partner_std(self, key, std_name):
         norm_key = self._normalize_partner_key(key)
-        if norm_key:
-            self.data["partners"][norm_key] = std_name
+        clean_name = self._clean_text(std_name)
+        if norm_key and clean_name and not self._looks_like_monetary_text(clean_name):
+            self.data['partners'][norm_key] = clean_name
 
 # --- Tags Manager ---
 class TagManager:
@@ -2036,27 +2326,49 @@ class MappingLibraryDialog(QDialog):
 
     def accept(self):
         """Save all data back to manager"""
-        # Products
         new_prod = {}
+        dropped_prod = 0
         for r in range(self.prod_table.rowCount()):
-            k = self.prod_table.item(r, 0).text().strip()
-            if k:
-                new_prod[k] = {
+            raw_key = self.prod_table.item(r, 0).text().strip()
+            if not raw_key:
+                continue
+            existing = self.mgr.get_product_std(raw_key) or {}
+            _, sanitized, _ = self.mgr._sanitize_product_entry(
+                raw_key,
+                {
                     "std_code": self.prod_table.item(r, 1).text().strip(),
-                    "std_name": self.prod_table.item(r, 2).text().strip()
-                }
+                    "std_name": self.prod_table.item(r, 2).text().strip(),
+                    "status": existing.get("status", ""),
+                    "source": existing.get("source", "mapping_library_dialog") or "mapping_library_dialog",
+                    "confidence": existing.get("confidence", ""),
+                    "updated_at": existing.get("updated_at", ""),
+                    "reviewed_by": existing.get("reviewed_by", ""),
+                    "sample_text": existing.get("sample_text", ""),
+                    "notes": existing.get("notes", ""),
+                },
+                source=existing.get("source", "mapping_library_dialog") or "mapping_library_dialog",
+                status=existing.get("status") or None,
+            )
+            if sanitized:
+                norm_key = self.mgr._normalize_product_key(raw_key)
+                new_prod[norm_key] = self.mgr._merge_product_entries(new_prod.get(norm_key), sanitized)
+            else:
+                dropped_prod += 1
         self.mgr.data["products"] = new_prod
-        
-        # Partners
+
         new_part = {}
         for r in range(self.part_table.rowCount()):
-            k = self.part_table.item(r, 0).text().strip()
-            v = self.part_table.item(r, 1).text().strip()
-            if k and v:
-                new_part[k] = v
+            raw_key = self.part_table.item(r, 0).text().strip()
+            raw_value = self.part_table.item(r, 1).text().strip()
+            norm_key = self.mgr._normalize_partner_key(raw_key)
+            clean_value = self.mgr._clean_text(raw_value)
+            if norm_key and clean_value:
+                new_part[norm_key] = clean_value
         self.mgr.data["partners"] = new_part
-        
+
         self.mgr.save()
+        if dropped_prod:
+            QMessageBox.information(self, "映射清洗", f"已自动跳过 {dropped_prod} 条无效或污染的产品映射。")
         super().accept()
 
 # --- GUI 组件 ---
@@ -10459,7 +10771,7 @@ class MainWindow(QMainWindow):
                 with open(self.mapping_file, 'r', encoding='utf-8') as f:
                     old_map = json.load(f)
                     for k, v in old_map.items():
-                        self.mapping_mgr.set_product_std(k, v, "")
+                        self.mapping_mgr.set_product_std(k, v, "", source="legacy_migration", status="candidate")
                 self.mapping_mgr.save()
                 self.log_message("已迁移旧版产品映射到新库")
             except Exception as e:
@@ -12207,8 +12519,12 @@ class MainWindow(QMainWindow):
         if os.path.exists(self.mapping_file):
             try:
                 with open(self.mapping_file, 'r', encoding='utf-8') as f:
-                    self.product_code_mapping = json.load(f)
+                    loaded_mapping = json.load(f)
+                cleaned_mapping, rejected_mapping = MappingManager.sanitize_legacy_product_mapping(loaded_mapping)
+                self.product_code_mapping = cleaned_mapping
                 self.log_message(f"已加 {len(self.product_code_mapping)} 个编码映")
+                if rejected_mapping:
+                    self.log_message(f"已忽略 {len(rejected_mapping)} 条旧版疑似金额/脏数据映射")
             except Exception as e:
                 self.log_message(f"加载映射文件失败: {e}")
                 self.product_code_mapping = {}
@@ -12258,9 +12574,13 @@ class MainWindow(QMainWindow):
     def save_product_mapping(self):
         """保存产品编码映射到JSON文件"""
         try:
+            cleaned_mapping, rejected_mapping = MappingManager.sanitize_legacy_product_mapping(self.product_code_mapping)
+            self.product_code_mapping = cleaned_mapping
             with open(self.mapping_file, 'w', encoding='utf-8') as f:
                 json.dump(self.product_code_mapping, f, ensure_ascii=False, indent=2)
             self.log_message(f"已保 {len(self.product_code_mapping)} 个编码映")
+            if rejected_mapping:
+                self.log_message(f"保存时忽略了 {len(rejected_mapping)} 条疑似金额/脏数据映射")
             return True
         except Exception as e:
             self.log_message(f"保存映射文件失败: {e}")
@@ -12359,7 +12679,7 @@ class MainWindow(QMainWindow):
             final_code = std_code or str(current.get("std_code", "")).strip()
             final_name = std_name or str(current.get("std_name", "")).strip()
             if final_code or final_name:
-                self.mapping_mgr.set_product_std(raw_code, final_code, final_name)
+                self.mapping_mgr.set_product_std(raw_code, final_code, final_name, source="conflict_resolution", status="reviewed")
         return True
 
     def show_product_mapping_conflicts(self):
@@ -12535,7 +12855,7 @@ class MainWindow(QMainWindow):
                     # Keep existing std_name if any, or use current desc
                     current = self.mapping_mgr.get_product_std(target_item.codigo_produto) or {}
                     std_name = current.get("std_name") or target_item.descricao or ""
-                    self.mapping_mgr.set_product_std(target_item.codigo_produto, value, std_name)
+                    self.mapping_mgr.set_product_std(target_item.codigo_produto, value, std_name, source="table_edit", status="reviewed", sample_text=target_item.descricao or "")
                     self.mapping_mgr.save()
             elif col == item_col_start + 2: target_item.descricao = value
             elif col == item_col_start + 3: target_item.ncm = value
