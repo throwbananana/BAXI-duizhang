@@ -22,6 +22,12 @@ class Item:
     desconto: Optional[float] = None
     tags: List[str] = field(default_factory=list)
 
+
+@dataclass
+class PaymentEntry:
+    forma: Optional[str] = None
+    valor: Optional[float] = None
+
 @dataclass
 class Invoice:
     file_name: str = ""
@@ -81,6 +87,16 @@ class Invoice:
     volumes_numeracao: Optional[str] = None
     peso_bruto: Optional[float] = None
     peso_liquido: Optional[float] = None
+
+
+    pagamentos: List[PaymentEntry] = field(default_factory=list)
+
+    retirada_cnpjcpf: Optional[str] = None
+    retirada_endereco: Optional[str] = None
+    retirada_bairro: Optional[str] = None
+    retirada_cep: Optional[str] = None
+    retirada_municipio: Optional[str] = None
+    retirada_uf: Optional[str] = None
 
     info_compl_contribuinte: Optional[str] = None
     info_compl_fisco: Optional[str] = None

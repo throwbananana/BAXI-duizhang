@@ -3,7 +3,7 @@ import re
 import unicodedata
 from typing import Optional, List, Tuple
 from brazil_tool.constants import MONEY_RE, CNPJ_RE, CPF_RE, ACCESS_KEY_RE, DIGITS44, PHONE_RE, CEP_RE
-from brazil_tool.core.models import Invoice, Item
+from brazil_tool.core.models import Invoice, Item, PaymentEntry
 from brazil_tool.core.utils import (
     br_to_float, norm_space, only_digits, strip_cnpj_cpf,
     fix_ocr_text, get_after_label, extract_block
@@ -13,6 +13,45 @@ DEST_BLOCK_START = r'DESTINAT[ÁA]RIO\s*/\s*REMETENTE|DESTINATARIO\s*/\s*REMETEN
 PRODUCT_BLOCK_START = r'DADOS\s+DO(?:S)?\s+PRODUTO(?:S)?\s*/\s*SERVI[CÇ]O(?:S)?'
 PRODUCT_BLOCK_END = r'INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|CALCULO\s+DO\s+IMPOSTO|C[ÁA]LCULO\s+DO\s+IMPOSTO|$'
 ALNUM_PRODUCT_CODE_RE = r'[A-Z0-9][A-Z0-9\-./]{2,}'
+
+
+BAD_FIELD_VALUES = {
+    "HORA", "UF", "CEP", "FONE", "FONE/FAX", "FONE / FAX",
+    "CNPJ/CPF", "CNPJ / CPF", "ENDERECO", "ENDEREÇO",
+    "MUNICIPIO", "MUNICÍPIO", "INSCRICAO ESTADUAL", "INSCRIÇÃO ESTADUAL",
+    "DATA DA EMISSAO", "DATA DA SAIDA", "DATA DA SAÍDA/ENTRADA"
+}
+
+
+def clean_inline_value(v: Optional[str]) -> Optional[str]:
+    if not v:
+        return None
+    v = norm_space(v).strip(" :;-")
+    if not v:
+        return None
+    if v.upper() in BAD_FIELD_VALUES:
+        return None
+    return v
+
+
+def looks_like_ie(v: Optional[str]) -> bool:
+    if not v:
+        return False
+    u = v.upper().strip()
+    if u in BAD_FIELD_VALUES:
+        return False
+    return bool(re.search(r"\d", u))
+
+
+def next_valid_value_after_label(block: str, label_regex: str, max_lookahead: int = 4) -> Optional[str]:
+    lines = [norm_space(x) for x in block.splitlines() if norm_space(x)]
+    for i, ln in enumerate(lines):
+        if re.search(label_regex, ln, re.I):
+            for cand in lines[i + 1:i + 1 + max_lookahead]:
+                cand = clean_inline_value(cand)
+                if cand:
+                    return cand
+    return None
 
 
 def translate_natureza(natureza: str) -> str:
@@ -324,7 +363,20 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
         inv.destinatario_uf = get_after_label(r'\bUF\b', r'([A-Z]{2})', dest_block, 60) or inv.destinatario_uf
         inv.destinatario_cep = get_after_label(r'CEP', r'(' + CEP_RE + r')', dest_block, 80)
         inv.destinatario_fone = get_after_label(r'(?:Telefone|Fone\s*/?\s*Fax?)', r'(' + PHONE_RE + r')', dest_block, 160)
-        inv.destinatario_ie = get_after_label(r'Inscri[cç][aã]o\s+Estadual\b', r'([A-Z0-9\.\-\/]+)', dest_block, 80)
+        raw_ie = get_after_label(
+            r'Inscri[cç][aã]o\s+Estadual\b',
+            r'([A-Z0-9\.\-\/]+)',
+            dest_block,
+            80
+        )
+        raw_ie = clean_inline_value(raw_ie)
+        if looks_like_ie(raw_ie):
+            inv.destinatario_ie = raw_ie
+
+        if not inv.destinatario_ie:
+            cand_ie = next_valid_value_after_label(dest_block, r'Inscri[cç][aã]o\s+Estadual')
+            if looks_like_ie(cand_ie):
+                inv.destinatario_ie = cand_ie
 
     m_data_emissao = re.search(r'(?:Data\s*(?:/\s*Hora)?\s+da\s+Emiss[aã]o)\s*.*?([0-3]?\d/[01]?\d/\d{2,4}(?:\s+\d{2}:\d{2}:\d{2})?)', text, re.I | re.S)
     if m_data_emissao:
@@ -446,14 +498,118 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
                 if inv.base_calculo_icms == br_to_float(all_calc_values[0]):
                     inv.valor_icms_st = br_to_float(all_calc_values[3])
 
-    inv.modalidade_frete_raw = get_after_label(r'(?:Frete\s+por\s+Conta|Modalidade\s+do\s+frete)', r'([0-9]\s*-\s*[^\n\r]+)', text, 160)
+    pay_block = extract_block(
+        text,
+        r'PAGAMENTO',
+        r'C[ÁA]LCULO\s+DO\s+IMPOSTO|TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS|DADOS\s+DOS\s+PRODUTOS|$'
+    )
+    if pay_block:
+        pay_lines = [norm_space(x) for x in pay_block.splitlines() if norm_space(x)]
+        i = 0
+        while i < len(pay_lines):
+            ln = pay_lines[i]
+
+            m_inline = re.search(
+                r'Forma\s+(.+?)\s+Valor\s+R\$\s*(' + MONEY_RE + r'|\d[\d\.,]*)',
+                ln,
+                re.I
+            )
+            if m_inline:
+                inv.pagamentos.append(
+                    PaymentEntry(
+                        forma=norm_space(m_inline.group(1)),
+                        valor=br_to_float(m_inline.group(2))
+                    )
+                )
+                i += 1
+                continue
+
+            if re.match(r'(?i)^Forma\s+', ln):
+                forma = re.sub(r'(?i)^Forma\s+', '', ln).strip()
+                valor = None
+                for j in range(i + 1, min(i + 4, len(pay_lines))):
+                    m_val = re.search(r'Valor\s+R\$\s*(' + MONEY_RE + r'|\d[\d\.,]*)', pay_lines[j], re.I)
+                    if m_val:
+                        valor = br_to_float(m_val.group(1))
+                        i = j
+                        break
+                inv.pagamentos.append(PaymentEntry(forma=forma, valor=valor))
+
+            i += 1
+
+    ret_block = extract_block(
+        text,
+        r'INFORMA[cç][OÕ]ES\s+DO\s+LOCAL\s+DE\s+RETIRADA',
+        r'PAGAMENTO|C[ÁA]LCULO\s+DO\s+IMPOSTO|TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS|$'
+    )
+    if ret_block:
+        inv.retirada_cnpjcpf = get_after_label(
+            r'CNPJ\s*/\s*CPF',
+            r'(' + CNPJ_RE + r'|' + CPF_RE + r')',
+            ret_block,
+            120
+        )
+        inv.retirada_endereco = get_after_label(
+            r'Endere[cç]o',
+            r'([^\n\r]+?)(?=\s*(?:Bairro|CEP|Munic|UF|Fone|$))',
+            ret_block,
+            260
+        ) or get_after_label(r'Endere[cç]o', r'([^\n\r]+)', ret_block, 260)
+        inv.retirada_bairro = get_after_label(
+            r'Bairro\s*/\s*Distrito|Bairro(?:/Distrito)?',
+            r'([^\n\r]+?)(?=\s*(?:CEP|Munic|UF|Fone|$))',
+            ret_block,
+            140
+        )
+        inv.retirada_cep = get_after_label(r'CEP', r'(' + CEP_RE + r')', ret_block, 80)
+        inv.retirada_municipio = get_after_label(
+            r'Munic[ií]pio',
+            r'([^\n\r]+?)(?=\s*(?:UF|Fone|$))',
+            ret_block,
+            140
+        )
+        inv.retirada_uf = get_after_label(r'\bUF\b', r'([A-Z]{2})', ret_block, 40)
+
+    inv.modalidade_frete_raw = get_after_label(
+        r'(?:Frete\s+por\s+Conta|Modalidade\s+do\s+frete|Frete)',
+        r'([0-9]\s*-\s*[^\n\r]+)',
+        text,
+        160
+    )
     transp_block = extract_block(text,
         r'TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS',
         r'INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
     if transp_block:
-        inv.transportador_nome = get_after_label(r'Transportador/?Remetente', r'([^\n\r]+)', transp_block, 180)
-        inv.transportador_cnpjcpf = get_after_label(r'CNPJ/CPF', r'([0-9\.\-\/]+)', transp_block, 100)
-        inv.transportador_ie = get_after_label(r'IE\b', r'([A-Z0-9\.\-\/]+)', transp_block, 80)
+        inv.transportador_nome = (
+            get_after_label(
+                r'(?:Nome\s*/\s*Raz[ãa]o\s+Social|Transportador/?Remetente)',
+                r'([^\n\r]+)',
+                transp_block,
+                180
+            )
+            or inv.transportador_nome
+        )
+        inv.transportador_nome = clean_inline_value(inv.transportador_nome)
+
+        inv.transportador_cnpjcpf = (
+            get_after_label(
+                r'CNPJ\s*/\s*CPF',
+                r'(' + CNPJ_RE + r'|' + CPF_RE + r')',
+                transp_block,
+                120
+            )
+            or inv.transportador_cnpjcpf
+        )
+
+        raw_t_ie = get_after_label(
+            r'(?:Inscri[cç][aã]o\s+Estadual|\bIE\b)',
+            r'([A-Z0-9\.\-\/]+)',
+            transp_block,
+            120
+        )
+        raw_t_ie = clean_inline_value(raw_t_ie)
+        if looks_like_ie(raw_t_ie):
+            inv.transportador_ie = raw_t_ie
         inv.placa_veiculo = get_after_label(r'Placa\s+do\s+Ve[ií]culo', r'([A-Z]{3}\-?\d{4}|\w{5,8})', transp_block, 80)
         inv.uf_veiculo = get_after_label(r'\bUF\b', r'([A-Z]{2})', transp_block, 40) or inv.uf_veiculo
         inv.rntc = get_after_label(r'RNTC', r'([A-Z0-9\-\ /]+)', transp_block, 80)
