@@ -11926,7 +11926,7 @@ class MainWindow(QMainWindow):
             invoice.destinatario_uf, invoice.destinatario_cep, invoice.destinatario_fone,
             invoice.transportador_nome, invoice.transportador_cnpjcpf, invoice.modalidade_frete_raw,
             invoice.placa_veiculo, invoice.uf_veiculo, invoice.peso_bruto, invoice.peso_liquido,
-            invoice.info_compl_contribuinte, invoice.llm_table_note, str(invoice.extract_meta),
+            invoice.info_compl_contribuinte, (invoice.llm_table_note or invoice.info_compl_fisco), str(invoice.extract_meta),
             ",".join(str(t) for t in (invoice.tags + item.tags)), # User Tags
             "-", # 收款进度 (Placeholder to avoid column shift)
             # Item data

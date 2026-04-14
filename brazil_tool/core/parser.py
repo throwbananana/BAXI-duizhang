@@ -12,6 +12,7 @@ from brazil_tool.core.utils import (
 DEST_BLOCK_START = r'DESTINAT[ÁA]RIO\s*/\s*REMETENTE|DESTINATARIO\s*/\s*REMETENTE'
 PRODUCT_BLOCK_START = r'DADOS\s+DO(?:S)?\s+PRODUTO(?:S)?\s*/\s*SERVI[CÇ]O(?:S)?'
 PRODUCT_BLOCK_END = r'INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|CALCULO\s+DO\s+IMPOSTO|C[ÁA]LCULO\s+DO\s+IMPOSTO|$'
+TRANSPORT_BLOCK_START = r'TRANSPORTADOR\s*/\s*VOLUMES\s+TRANSPORTADOS'
 ALNUM_PRODUCT_CODE_RE = r'[A-Z0-9][A-Z0-9\-./]{2,}'
 
 
@@ -19,7 +20,10 @@ BAD_FIELD_VALUES = {
     "HORA", "UF", "CEP", "FONE", "FONE/FAX", "FONE / FAX",
     "CNPJ/CPF", "CNPJ / CPF", "ENDERECO", "ENDEREÇO",
     "MUNICIPIO", "MUNICÍPIO", "INSCRICAO ESTADUAL", "INSCRIÇÃO ESTADUAL",
-    "DATA DA EMISSAO", "DATA DA SAIDA", "DATA DA SAÍDA/ENTRADA"
+    "DATA DA EMISSAO", "DATA DA SAIDA", "DATA DA SAÍDA/ENTRADA",
+    "FRETE", "CÓDIGO ANTT", "CODIGO ANTT", "PLACA DO VEÍCULO", "PLACA DO VEICULO",
+    "PESO BRUTO", "PESO LÍQUIDO", "PESO LIQUIDO", "QUANTIDADE", "ESPÉCIE",
+    "ESPECIE", "MARCA", "NUMERAÇÃO", "NUMERACAO"
 }
 
 
@@ -30,6 +34,8 @@ def clean_inline_value(v: Optional[str]) -> Optional[str]:
     if not v:
         return None
     if v.upper() in BAD_FIELD_VALUES:
+        return None
+    if re.match(r'^\d+\s*-\s*', v):
         return None
     return v
 
@@ -146,6 +152,10 @@ def parse_items_danfe_block(block: str) -> List[Item]:
             s_up.startswith('XPED:') or
             'TOTAL APROXIMADO DE TRIBUTOS' in s_up or
             'FEDERAIS, ESTADUAIS E MUNICIPAIS' in s_up or
+            'DESCRIÇÃO DO PRODUTO' in s_up or
+            'CÓDIGO PRODUTO' in s_up or
+            'NCM/SH' in s_up or
+            'VALOR UNIT' in s_up or
             s_up.startswith('PFCPUFDEST=') or
             s_up.startswith('PICMS') or
             s_up.startswith('VICMS') or
@@ -157,19 +167,29 @@ def parse_items_danfe_block(block: str) -> List[Item]:
 
     while i < len(lines):
         ln = lines[i]
-        m = re.match(r'^(' + ALNUM_PRODUCT_CODE_RE + r')\s+(.+)$', ln)
+        m = re.match(r'^(' + ALNUM_PRODUCT_CODE_RE + r')(?:\s+(.+))?$', ln)
         if not m or 'CÓDIGO PRODUTO' in ln.upper() or 'CODIGO PRODUTO' in ln.upper():
             i += 1
             continue
 
+        code_token = m.group(1)
+        if not re.search(r'\d', code_token):
+            i += 1
+            continue
+
         item = Item()
-        item.codigo_produto = m.group(1)
-        desc_parts = [m.group(2)]
+        item.codigo_produto = code_token
+        first_desc = m.group(2)
+        desc_parts = [first_desc] if first_desc else []
         i += 1
 
         while i < len(lines) and not re.match(r'^\d{8}\b', lines[i]):
-            if not is_noise_line(lines[i]):
-                desc_parts.append(lines[i])
+            current_line = lines[i]
+            if not desc_parts and is_noise_line(current_line):
+                i += 1
+                continue
+            if not is_noise_line(current_line):
+                desc_parts.append(current_line)
             i += 1
 
         if i >= len(lines):
@@ -235,6 +255,80 @@ def parse_items_danfe_block(block: str) -> List[Item]:
     return items
 
 
+def parse_mashed_items(block: str) -> List[Item]:
+    """Robust extraction for items in mashed text (e.g. PyPDF2 output)."""
+    full_text = " ".join([norm_space(x) for x in block.splitlines() if x.strip()])
+    items: List[Item] = []
+
+    # Anchor pattern: NCM(8) + Space + CST(3)CFOP(4) + UN(1-4) + QTY
+    # Example: 83119000 2006108un1,0000
+    pattern = r'(\d{8})\s+(\d{3})\s*(\d{4})\s*([a-zA-Z]{1,4})\s*(\d+[\d\.,]*)'
+    matches = list(re.finditer(pattern, full_text))
+
+    for i, m in enumerate(matches):
+        it = Item()
+        it.ncm = m.group(1)
+        it.cst = m.group(2)
+        it.cfop = m.group(3)
+        it.unidade = m.group(4)
+        it.quantidade = br_to_float(m.group(5))
+
+        # 1. Extraction of Head (Description and Product Code)
+        start_idx = matches[i-1].end() if i > 0 else 0
+        # If there are money values after previous match, the head starts after them
+        if i > 0:
+            prev_tail = full_text[matches[i-1].end():m.start()]
+            money_m = list(re.finditer(MONEY_RE, prev_tail))
+            if money_m:
+                start_idx = matches[i-1].end() + money_m[-1].end()
+
+        head = full_text[start_idx:m.start()].strip()
+
+        # Clean head of noise
+        head = re.sub(r'(?i)(?:pFCPUFDest|pICMSUFDest|pICMSInterPart|vFCPUFDest|vICMSUFDest|vICMSUFRemet|vTotTrib)\s*=\s*[\d\.,%]*', '', head)
+        head = re.sub(r'(?i)\(Pedido\s+\d+\)', '', head)
+        head = re.sub(r'(?i)Pedido\s*:\s*\d+', '', head)
+        # Clean common header labels more aggressively (including mashed ones)
+        header_terms = [
+            r'C[OÓ]DIGO\s+PRODUTO', r'DESCRI[CÇ][AÃ]O\s+DO\s+PRODUTO\s*/\s*SERVI[CÇ]O',
+            r'NCM/SH', r'O/CST', r'CFOP', r'UNQUANTVALOR', r'UNITVALOR', r'TOTALVALOR', r'DESCB\.C[ÁA]LC',
+            r'ICMSVALOR', r'IPIAL[ÍI]Q\.', r'ICMSAL[ÍI]Q\.', r'AL[ÍI]Q\.',
+            r'UN', r'QUANT', r'VALOR', r'UNIT', r'TOTAL', r'ICMS', r'IPI', r'B\.C[ÁA]LC'
+        ]
+        for term in header_terms:
+            head = re.sub(r'(?i)' + term, '', head)
+        
+        head = head.strip(" ,-)")
+
+        # Extract code from head (usually first word)
+        # We look for the first word that isn't empty and has some length
+        words = [w for w in head.split() if len(w) >= 3]
+        if words:
+            it.codigo_produto = words[0]
+            it.descricao = fix_ocr_text(head[head.find(words[0]) + len(words[0]):].strip(" ,-/"))
+        else:
+            it.descricao = fix_ocr_text(head)
+
+        # 2. Extraction of Money Values (after the anchor)
+        next_start = matches[i+1].start() if i + 1 < len(matches) else len(full_text)
+        tail = full_text[m.end():next_start]
+        values = re.findall(MONEY_RE, tail)
+
+        if len(values) >= 2:
+            it.valor_unitario = br_to_float(values[0])
+            it.valor_total = br_to_float(values[1])
+            # Additional fields if available
+            v_idx = 2
+            if len(values) > v_idx: it.desconto = br_to_float(values[v_idx]); v_idx += 1
+            if len(values) > v_idx: it.bc_icms = br_to_float(values[v_idx]); v_idx += 1
+            if len(values) > v_idx: it.valor_icms = br_to_float(values[v_idx]); v_idx += 1
+            if len(values) > v_idx: it.valor_ipi = br_to_float(values[v_idx]); v_idx += 1
+
+        items.append(it)
+
+    return items
+
+
 def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     """Core logic to parse Invoice object from text."""
     inv = Invoice(file_name=file_name)
@@ -251,7 +345,13 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     inv.serie = get_after_label(r'S[eé]rie:?', r'(\b[0-9]{1,3}\b)', text, 250) or \
                 get_after_label(r'S[eé]rie:?', r'\b([A-Za-z0-9]{1,5})\b', text, 250)
 
-    raw_natureza = get_after_label(r'Natureza\s+de\s+Opera[cç][aã]o', r'((?!Protocolo)[A-Z][A-Z \-/]{2,60})', text, 220)
+    raw_natureza = get_after_label(r'Natureza\s+de\s+Opera[cç][aã]o', r'((?!Protocolo)[A-ZÁÉÍÓÚÃÕÂÊÔÇ][A-ZÁÉÍÓÚÃÕÂÊÔÇa-zÁéíóúãõâêôç0-9 \-/]{2,80}?)[\n\r\s]*(?:PROTOCOLO|AUTORIZACAO|INSCRI|CNPJ|CPF|DATA|$)', text, 220)
+
+    if not raw_natureza:
+         # even more relaxed fallback for Natureza
+         m_nat = re.search(r'NATUREZA\s+DA\s+OPERA[ÇC][ÃA]O\s*(?:\n|\r\n)?\s*(.+?)\s*(?:PROTOCOLO|AUTORIZACAO|$)', text, re.I | re.S)
+         if m_nat:
+             raw_natureza = m_nat.group(1).strip()
 
     is_bad = False
     if not raw_natureza:
@@ -284,6 +384,19 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
 
     inv.protocolo_autorizacao = get_after_label(r'Protocolo\s+de\s+autoriza[cç][aã]o', r'(\d{10,20})', text, 180)
 
+    m_dest_start = re.search(DEST_BLOCK_START, text, re.I | re.S)
+    header_block = text[:m_dest_start.start()] if m_dest_start else text[:2500]
+    raw_emit_ie = clean_inline_value(
+        get_after_label(
+            r'Inscri[cç][aã]o\s+Estadual\b',
+            r'([A-Z0-9\.\-\/]+)',
+            header_block,
+            80
+        )
+    )
+    if looks_like_ie(raw_emit_ie):
+        inv.emitente_ie = raw_emit_ie
+
     cnpjs = re.findall(CNPJ_RE, text)
     if cnpjs:
         inv.emitente_cnpj = cnpjs[0] if len(cnpjs) >= 1 else None
@@ -304,17 +417,29 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     )
     if dest_block:
         m_dest = re.search(
-            r'NOME\s*/\s*RAZ[ÃA]O\s+SOCIAL\s+(.+?)\s+CNPJ\s*/\s*CPF\s+(' + CNPJ_RE + r'|' + CPF_RE + r')',
+            r'NOME\s*/\s*RAZ[ÃA]O\s+SOCIAL\s+(.+?)\s*(?:CNPJ|CPF)',
             dest_block,
             re.I | re.S
         )
         if m_dest:
             inv.destinatario_nome = strip_cnpj_cpf(norm_space(m_dest.group(1)))
-            inv.destinatario_cnpj = m_dest.group(2)
 
-        dest_cnpj_cpf = get_after_label(r'CNPJ\s*/\s*CPF', r'(' + CNPJ_RE + r'|' + CPF_RE + r')', dest_block, 120)
+        dest_cnpj_cpf = re.search(r'(' + CNPJ_RE + r'|' + CPF_RE + r')', dest_block)
         if dest_cnpj_cpf:
-            inv.destinatario_cnpj = dest_cnpj_cpf
+            inv.destinatario_cnpj = dest_cnpj_cpf.group(1)
+            # If name not found yet, try to find it before the CNPJ/CPF
+            if not inv.destinatario_nome:
+                pre_cnpj = dest_block[:dest_cnpj_cpf.start()].strip()
+                lines = [l.strip() for l in pre_cnpj.splitlines() if l.strip()]
+                if lines:
+                    last_line = lines[-1]
+                    if "SOCIAL" in last_line.upper():
+                        # Try to find after "SOCIAL"
+                        m_social = re.search(r'SOCIAL\s*(?:\n|\r\n)?\s*(.+)$', last_line, re.I)
+                        if m_social:
+                             inv.destinatario_nome = strip_cnpj_cpf(m_social.group(1))
+                    else:
+                        inv.destinatario_nome = strip_cnpj_cpf(last_line)
 
         flat = dest_block.replace("\n", " ")
         m_name_cnpj = re.search(r'([A-Z][A-Z0-9 &\.,\-]{2,80})\s+(' + CNPJ_RE + r'|' + CPF_RE + r')', flat)
@@ -382,18 +507,22 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     if m_data_emissao:
         inv.data_emissao = m_data_emissao.group(1)
 
-    m_data_saida_entrada = re.search(r'(?:Data\s*(?:/\s*Hora)?\s+de\s+Sa[ií]da/Entrada)\s*.*?([0-3]?\d/[01]?\d/\d{2,4}(?:\s+\d{2}:\d{2}:\d{2})?)', text, re.I | re.S)
+    m_data_saida_entrada = re.search(
+        r'(?:Data\s*(?:/\s*Hora)?\s+d[ae]\s+Sa[ií]da\s*/\s*Entrada)\s*.*?([0-3]?\d/[01]?\d/\d{2,4}(?:\s+\d{2}:\d{2}:\d{2})?)',
+        text,
+        re.I | re.S
+    )
     if m_data_saida_entrada:
         inv.data_saida_entrada = m_data_saida_entrada.group(1)
 
     calc_block = extract_block(text,
         r'(?=Base\s+de\s+Calculo\s+ICMS|Base\s+de\s+C[áa]lculo\s+do\s+ICMS|BASE\s+DE\s+C[ÁA]LC\.?\s+DO\s+ICMS)',
-        r'TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS|INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
+        TRANSPORT_BLOCK_START + r'|INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
 
     if not calc_block or len(calc_block) < 20:
         calc_block = extract_block(text,
             r'(?=CALCULO\s+DO\s+IMPOSTO|C[ÁA]LCULO\s+DO\s+IMPOSTO)',
-            r'TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS|INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
+            TRANSPORT_BLOCK_START + r'|INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
 
     if calc_block:
         lines = [l.strip() for l in calc_block.splitlines() if l.strip()]
@@ -501,7 +630,7 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     pay_block = extract_block(
         text,
         r'PAGAMENTO',
-        r'C[ÁA]LCULO\s+DO\s+IMPOSTO|TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS|DADOS\s+DOS\s+PRODUTOS|$'
+        r'C[ÁA]LCULO\s+DO\s+IMPOSTO|' + TRANSPORT_BLOCK_START + r'|DADOS\s+DOS\s+PRODUTOS|$'
     )
     if pay_block:
         pay_lines = [norm_space(x) for x in pay_block.splitlines() if norm_space(x)]
@@ -577,7 +706,7 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
         160
     )
     transp_block = extract_block(text,
-        r'TRANSPORTADOR/?VOLUMES\s+TRANSPORTADOS',
+        TRANSPORT_BLOCK_START,
         r'INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|$')
     if transp_block:
         inv.transportador_nome = (
@@ -590,6 +719,22 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
             or inv.transportador_nome
         )
         inv.transportador_nome = clean_inline_value(inv.transportador_nome)
+        if not inv.transportador_nome:
+            transp_lines = [norm_space(x) for x in transp_block.splitlines() if norm_space(x)]
+            for idx, ln in enumerate(transp_lines):
+                if re.search(r'(?:Nome\s*/\s*Raz[ãa]o\s+Social|Transportador/?Remetente)', ln, re.I):
+                    for cand in transp_lines[idx + 1:idx + 6]:
+                        cleaned = clean_inline_value(cand)
+                        if not cleaned:
+                            continue
+                        if not re.search(r'[A-Za-zÁÉÍÓÚÃÕÂÊÔÇáéíóúãõâêôç]', cleaned):
+                            continue
+                        if re.search(r'(?i)\bpor\s+conta\b', cleaned):
+                            continue
+                        inv.transportador_nome = cleaned
+                        break
+                    if inv.transportador_nome:
+                        break
 
         inv.transportador_cnpjcpf = (
             get_after_label(
@@ -624,164 +769,56 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
         inv.peso_bruto = grab_weight(r'Peso\s+Bruto')
         inv.peso_liquido = grab_weight(r'Peso\s+L[ií]quido')
 
+    add_block = extract_block(
+        text,
+        r'(?:DADOS\s+ADICIONAIS|INFORMA[cç][OÕ]ES\s+COMPLEMENTARES)',
+        r'RESERVADO\s+AO\s+FISCO|$'
+    )
+    if add_block:
+        m_contrib = re.search(
+            r'Inf\.\s*Contribuinte\s*:\s*(.*?)(?=(?:Inf\.\s*fisco\s*:|RESERVADO\s+AO\s+FISCO|$))',
+            add_block,
+            re.I | re.S
+        )
+        m_fisco = re.search(
+            r'Inf\.\s*fisco\s*:\s*(.*?)(?=(?:RESERVADO\s+AO\s+FISCO|$))',
+            add_block,
+            re.I | re.S
+        )
+        if m_contrib:
+            inv.info_compl_contribuinte = norm_space(m_contrib.group(1))
+        else:
+            cleaned_add_block = norm_space(re.sub(r'(?i)\bINFORMA[cç][OÕ]ES\s+COMPLEMENTARES\b', '', add_block))
+            cleaned_add_block = norm_space(re.sub(r'(?i)\bDADOS\s+ADICIONAIS\b', '', cleaned_add_block))
+            if cleaned_add_block:
+                inv.info_compl_contribuinte = cleaned_add_block
+        if m_fisco:
+            inv.info_compl_fisco = norm_space(m_fisco.group(1))
+
     block = extract_block(text, PRODUCT_BLOCK_START, PRODUCT_BLOCK_END) or text
     itens: List[Item] = parse_items_danfe_block(block)
 
-    if not itens:
-        full_item_text = " ".join([norm_space(x) for x in block.splitlines()])
-        product_code_re = r'(?<![A-Za-z])\b\d{10,}\b'
-        matches = list(re.finditer(product_code_re, full_item_text))
+    # Suspect bad parsing if description is too short, just numbers, or contains header labels
+    is_suspicious = False
+    if itens:
+        for it in itens:
+            desc = (it.descricao or "").upper()
+            if len(desc) < 5 or re.fullmatch(r'[\d\., ]+', desc):
+                is_suspicious = True
+                break
+            if "DESCRIÇÃO DO PRODUTO" in desc or "CÓDIGO PRODUTO" in desc or "NCM/SH" in desc:
+                is_suspicious = True
+                break
+            if not it.codigo_produto or not it.ncm:
+                is_suspicious = True
+                break
 
-        raw_entries = []
-        for i, match in enumerate(matches):
-            start = match.start()
-            end = matches[i+1].start() if i + 1 < len(matches) else None
-            raw_entries.append(full_item_text[start:end])
-
-        for entry in raw_entries:
-            if len(entry) < 20 or not re.search(MONEY_RE, entry):
-                continue
-
-            it = Item()
-
-            m = re.search(r"^(?P<codigo_produto>\d{10,})", entry)
-            if m: it.codigo_produto = m.group('codigo_produto')
-
-            m = re.search(r"\b(?P<ncm>\d{8})\b", entry)
-            if m: it.ncm = m.group('ncm')
-
-            if it.ncm:
-                m = re.search(re.escape(it.ncm) + r"\s+(?P<cst>\d{3})", entry)
-                if m: it.cst = m.group('cst')
-
-            m = re.search(r"\b(?P<cfop>\d{4})\b", entry)
-            if m: it.cfop = m.group('cfop')
-
-            m = re.search(r"\b(?P<unidade>UN|UNID|PC|KG|LT|M|CX|PCT|SC)\b", entry, re.I)
-            if m: it.unidade = m.group('unidade')
-
-            money_values = re.findall(MONEY_RE, entry)
-            map_values = money_values[:]
-            if len(map_values) >= 7 and re.search(r"(\d+[\,\.]\d{2})\s+(\d+[\,\.]\d{2})\s*$", entry):
-                map_values = map_values[:-2]
-            else:
-                aliq_pair_match = None
-                for mm in re.finditer(r"(\d+[\,\.]\d{2})\s+(\d+[\,\.]\d{2})(?=\s+[A-Za-z])", entry):
-                    aliq_pair_match = mm
-                if len(map_values) >= 7 and aliq_pair_match:
-                    if map_values[-2] == aliq_pair_match.group(1) and map_values[-1] == aliq_pair_match.group(2):
-                        map_values = map_values[:-2]
-
-            m_quant = re.search(r'\b(?:' + '|'.join(['UN', 'UNID', 'PC', 'KG', 'LT', 'M', 'CX', 'PCT', 'SC']) + r')\b\s*(\d+(?:,\d+)?)', entry, re.I)
-
-            if m_quant:
-                it.quantidade = br_to_float(m_quant.group(1))
-
-                if len(map_values) >= 2:
-                    it.valor_unitario = br_to_float(map_values[0])
-
-                    val_1 = br_to_float(map_values[1])
-                    raw_total = (it.quantidade or 0) * (it.valor_unitario or 0)
-
-                    is_index_1_total = False
-                    if raw_total > 0 and val_1 is not None:
-                        diff = abs(val_1 - raw_total)
-                        if diff < 1.0 or (diff / raw_total) < 0.05:
-                            is_index_1_total = True
-
-                    total_index = 2
-                    expected_total = None
-
-                    if is_index_1_total:
-                        it.desconto = 0.0
-                        it.valor_total = val_1
-                        total_index = 1
-                    else:
-                        it.desconto = val_1
-                        expected_total = raw_total - (it.desconto or 0)
-
-                        if len(map_values) > 2:
-                            candidates = []
-                            for idx in (2, 3):
-                                if len(map_values) > idx:
-                                    candidates.append((idx, br_to_float(map_values[idx])))
-
-                            if candidates:
-                                valid_candidates = [c for c in candidates if c[1] is not None]
-                                if valid_candidates:
-                                    total_index = min(valid_candidates, key=lambda c: abs(c[1] - expected_total))[0]
-
-                    if len(map_values) > total_index and it.valor_total is None:
-                        it.valor_total = br_to_float(map_values[total_index])
-                    if len(map_values) > total_index + 1:
-                        it.bc_icms = br_to_float(map_values[total_index + 1])
-                    if len(map_values) > total_index + 2:
-                        it.valor_icms = br_to_float(map_values[total_index + 2])
-                    if len(map_values) > total_index + 3:
-                        it.valor_ipi = br_to_float(map_values[total_index + 3])
-                    elif total_index == 3 and len(map_values) > 2:
-                        it.valor_ipi = br_to_float(map_values[2])
-            else:
-                if len(map_values) >= 7:
-                    it.quantidade = br_to_float(map_values[0])
-                    it.valor_unitario = br_to_float(map_values[1])
-                    it.desconto = br_to_float(map_values[2])
-                    it.valor_total = br_to_float(map_values[3])
-                    it.bc_icms = br_to_float(map_values[4])
-                    it.valor_icms = br_to_float(map_values[5])
-                    it.valor_ipi = br_to_float(map_values[6])
-
-            aliq_end_index = -1
-            if it.ncm:
-                ncm_match = re.search(r"\b" + re.escape(it.ncm) + r"\b", entry)
-                if ncm_match:
-                    start_search = ncm_match.end()
-
-                    aliq_matches = list(re.finditer(r"(\d+[\,\.]\d{2})\s+(\d+[\,\.]\d{2})(?=\s|$|\s+[A-Za-z])", entry[start_search:]))
-
-                    if aliq_matches:
-                        m_aliq = aliq_matches[-1]
-                        it.aliquota_icms = br_to_float(m_aliq.group(1))
-                        it.aliquota_ipi = br_to_float(m_aliq.group(2))
-                        aliq_end_index = start_search + m_aliq.end()
-
-            if it.aliquota_icms is None:
-                m = re.search(r"(\d+[\,\.]\d{2})\s+(\d+[\,\.]\d{2})\s*$", entry)
-                if m and len(m.groups()) == 2:
-                    it.aliquota_icms = br_to_float(m.group(1))
-                    it.aliquota_ipi = br_to_float(m.group(2))
-                    aliq_end_index = m.end()
-
-            desc_part1 = ""
-            if it.codigo_produto and it.ncm:
-                pattern = re.escape(it.codigo_produto) + r"\s+(.*?)\s+(?=\b" + re.escape(it.ncm) + r"\b)"
-                m_desc1 = re.search(pattern, entry)
-                if m_desc1:
-                    desc_part1 = m_desc1.group(1).strip()
-                    desc_part1 = norm_space(desc_part1)
-
-            desc_part2 = ""
-            if aliq_end_index > 0 and aliq_end_index < len(entry):
-                raw_tail = entry[aliq_end_index:].strip()
-                if raw_tail:
-                    desc_part2 = norm_space(raw_tail)
-            else:
-                desc_entry = re.sub(r"(\d+[\,\.]\d{2})\s+(\d+[\,\.]\d{2})\s*$", "", entry).strip()
-                all_money_positions = [(m.start(), m.end()) for m in re.finditer(MONEY_RE, desc_entry)]
-                if all_money_positions:
-                    last_money_end = all_money_positions[-1][1]
-                    raw_tail = desc_entry[last_money_end:].strip()
-                    clean_tail = re.sub(r'\b\d{8}\b', '', raw_tail)
-                    clean_tail = re.sub(r'\b\d{3}\b', '', clean_tail)
-                    clean_tail = re.sub(r'\b\d{4}\b', '', clean_tail)
-                    desc_part2 = norm_space(clean_tail)
-
-            full_desc_parts = [p for p in [desc_part1, desc_part2] if len(p) > 2]
-            if full_desc_parts:
-                raw_desc = " ".join(full_desc_parts)
-                it.descricao = fix_ocr_text(raw_desc)
-
-            itens.append(it)
+    if not itens or is_suspicious:
+        mashed = parse_mashed_items(block)
+        if mashed:
+            # If mashed found something and original was suspicious, prefer mashed
+            # or if original found nothing, use mashed.
+            itens = mashed
 
     inv.emitente_nome = strip_cnpj_cpf(inv.emitente_nome)
     inv.destinatario_nome = strip_cnpj_cpf(inv.destinatario_nome)

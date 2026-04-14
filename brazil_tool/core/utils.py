@@ -93,6 +93,8 @@ def strip_cnpj_cpf(s: Optional[str]) -> Optional[str]:
     # Clean separators
     out = re.sub(r'[,\.;:\-]\s*$', '', out).strip()
     out = re.sub(r'\s{2,}', ' ', out)
+    # Remove trailing CNPJ/CPF labels that sometimes stick to names in PDF extraction
+    out = re.sub(r'(?i)\b(?:CNPJ\s*/\s*CPF|CNPJ|CPF)\s*$', '', out)
     return out.strip(" -/")
 
 def fix_ocr_text(text: str) -> str:
