@@ -15,6 +15,7 @@ from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from brazil_tool.core.models import Invoice, Item
+from brazil_tool.core.export_schema import format_export_date
 from brazil_tool.core.parser import parse_invoice_from_text
 from brazil_tool.core.pdf import extract_text_from_pdf
 from brazil_tool.core.llm import run_llm_assist, apply_llm_result
@@ -10963,7 +10964,6 @@ class MainWindow(QMainWindow):
         
         # 2. Find "User Tags" column index
         # Combined headers: invoice_headers + item_headers
-        # "User Tags" is in invoice_headers, usually index 40
         try:
             col_idx = self.combined_headers.index("用户标签")
         except ValueError:
@@ -11199,7 +11199,8 @@ class MainWindow(QMainWindow):
             "收货方名称", "收货方CNPJ", "收货方IE", "收货方地址", "收货方街区",
             "收货方城市", "收货方州", "收货方CEP", "收货方电话",
             "运输公司", "运输公司CNPJ/CPF", "运费方式", "车辆车牌", "车辆UF",
-            "毛重", "净重", "补充信息", "备注", "提取元数据", "用户标签", "收款进度"
+            "毛重", "净重", "补充信息", "备注", "提取元数据",
+            "平台", "Pedido", "订单号", "用户标签", "收款进度"
         ]
         self.item_headers = [
             "商品编码", "国内编码", "商品描述", "NCM", "CST", "CFOP", "单位", "数量",
@@ -11830,7 +11831,7 @@ class MainWindow(QMainWindow):
             full_row = self.get_row_from_invoice_and_item(invoice, Item())
             
             # --- 核心修复：根据 invoice_headers 映射数据，确保列不偏移 ---
-            # invoice_headers 的长度是 41, 最后一列是 "收款进度"
+            # invoice_headers 的最后一列始终是 "收款进度"
             # 我们取 full_row 的前 40 列 (对应发票属性)
             display_data = full_row[:data_col_count]
             
@@ -11927,6 +11928,7 @@ class MainWindow(QMainWindow):
             invoice.transportador_nome, invoice.transportador_cnpjcpf, invoice.modalidade_frete_raw,
             invoice.placa_veiculo, invoice.uf_veiculo, invoice.peso_bruto, invoice.peso_liquido,
             invoice.info_compl_contribuinte, (invoice.llm_table_note or invoice.info_compl_fisco), str(invoice.extract_meta),
+            invoice.plataforma, invoice.pedido, invoice.numero_pedido,
             ",".join(str(t) for t in (invoice.tags + item.tags)), # User Tags
             "-", # 收款进度 (Placeholder to avoid column shift)
             # Item data
@@ -11960,6 +11962,7 @@ class MainWindow(QMainWindow):
         """通用导出函数 (支持 .csv  .xlsx)"""
         try:
             ext = os.path.splitext(path)[1].lower()
+            export_date_headers = {"签发日期", "进出日期"}
             
             if ext == ".xlsx":
                 if openpyxl is None:
@@ -11971,8 +11974,10 @@ class MainWindow(QMainWindow):
                 for r in rows:
                     # Clean data for Excel (remove illegal chars if any)
                     clean_row = []
-                    for cell in r:
+                    for header, cell in zip(headers, r):
                         val = cell
+                        if header in export_date_headers:
+                            val = format_export_date(val)
                         if isinstance(val, str):
                             # Replace newlines with space for cleaner output
                             val = val.replace('\n', ' ')
@@ -11990,7 +11995,11 @@ class MainWindow(QMainWindow):
                     # Clean newlines for CSV too
                     clean_rows = []
                     for r in rows:
-                        clean_rows.append([str(c).replace('\n', ' ') if c is not None else "" for c in r])
+                        clean_row = []
+                        for header, cell in zip(headers, r):
+                            val = format_export_date(cell) if header in export_date_headers else cell
+                            clean_row.append(str(val).replace('\n', ' ') if val is not None else "")
+                        clean_rows.append(clean_row)
                     writer.writerows(clean_rows)
 
             self.log_message(f"成功导出  {path}")
@@ -12840,8 +12849,14 @@ class MainWindow(QMainWindow):
                 target_invoice.extract_meta = ast.literal_eval(value)
             except: pass
         elif col == 40:
-            target_invoice.tags = [t.strip() for t in value.split(",") if t.strip()]
+            target_invoice.plataforma = value
         elif col == 41:
+            target_invoice.pedido = value
+        elif col == 42:
+            target_invoice.numero_pedido = value
+        elif col == 43:
+            target_invoice.tags = [t.strip() for t in value.split(",") if t.strip()]
+        elif col == 44:
             pass # 收款进度 is read-only or calculated
 
         # Item字段 (如果有target_item)
@@ -12951,6 +12966,12 @@ class MainWindow(QMainWindow):
                 invoice.extract_meta = ast.literal_eval(value)
             except: pass
         elif col == 40:
+            invoice.plataforma = value
+        elif col == 41:
+            invoice.pedido = value
+        elif col == 42:
+            invoice.numero_pedido = value
+        elif col == 43:
             invoice.tags = [t.strip() for t in value.split(",") if t.strip()]
         
         # 同步更新到收款数据库

@@ -101,6 +101,9 @@ class Invoice:
     info_compl_contribuinte: Optional[str] = None
     info_compl_fisco: Optional[str] = None
     llm_table_note: Optional[str] = None
+    plataforma: Optional[str] = None
+    pedido: Optional[str] = None
+    numero_pedido: Optional[str] = None
     tags: List[str] = field(default_factory=list)
 
     extract_meta: Dict[str, str] = field(default_factory=dict)

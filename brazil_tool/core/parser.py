@@ -14,6 +14,11 @@ PRODUCT_BLOCK_START = r'DADOS\s+DO(?:S)?\s+PRODUTO(?:S)?\s*/\s*SERVI[CÇ]O(?:S)?
 PRODUCT_BLOCK_END = r'INFORMA[cç][OÕ]ES\s+COMPLEMENTARES|DADOS\s+ADICIONAIS|Reservado\s+ao\s+Fisco|CALCULO\s+DO\s+IMPOSTO|C[ÁA]LCULO\s+DO\s+IMPOSTO|$'
 TRANSPORT_BLOCK_START = r'TRANSPORTADOR\s*/\s*VOLUMES\s+TRANSPORTADOS'
 ALNUM_PRODUCT_CODE_RE = r'[A-Z0-9][A-Z0-9\-./]{2,}'
+SHOPEE_PEDIDO_RE = re.compile(r'\b\d{6}[A-Z0-9]{8}\b', re.I)
+MERCADO_LIVRE_ORDER_RE = re.compile(r'\b20\d{14}\b')
+XPED_LABEL_RE = re.compile(r'(?i)\bxPed\b[\s:：\(\)\-\/]*([A-Z0-9][A-Z0-9\-]{5,19})')
+PEDIDO_LABEL_RE = re.compile(r'(?i)\bPedido\b[\s:：\(\)\-\/]*([A-Z0-9][A-Z0-9\-]{5,19})')
+PEDIDO_INLINE_RE = re.compile(r'(?i)\(?\bPedido\b[\s:：]*[A-Z0-9][A-Z0-9\-]{5,19}\)?')
 
 
 BAD_FIELD_VALUES = {
@@ -25,6 +30,142 @@ BAD_FIELD_VALUES = {
     "PESO BRUTO", "PESO LÍQUIDO", "PESO LIQUIDO", "QUANTIDADE", "ESPÉCIE",
     "ESPECIE", "MARCA", "NUMERAÇÃO", "NUMERACAO"
 }
+
+
+def normalize_marketplace_order_token(token: Optional[str]) -> Optional[str]:
+    if not token:
+        return None
+    cleaned = re.sub(r'[^A-Z0-9]', '', str(token).upper())
+    return cleaned or None
+
+
+def classify_marketplace_order(token: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    normalized = normalize_marketplace_order_token(token)
+    if not normalized:
+        return None, None
+    if SHOPEE_PEDIDO_RE.fullmatch(normalized) and any(ch.isalpha() for ch in normalized[6:]):
+        return "Shopee", normalized
+    if MERCADO_LIVRE_ORDER_RE.fullmatch(normalized):
+        return "Mercado Livre", normalized
+    return None, None
+
+
+def is_marketplace_order_token(token: Optional[str]) -> bool:
+    platform, order_number = classify_marketplace_order(token)
+    return bool(platform and order_number)
+
+
+def format_invoice_number(raw_digits: Optional[str]) -> Optional[str]:
+    digits = only_digits(raw_digits or "")
+    if len(digits) != 9:
+        return None
+    return f"{digits[:3]}.{digits[3:6]}.{digits[6:]}"
+
+
+def derive_invoice_fields_from_access_key(access_key: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    digits = only_digits(access_key or "")
+    if len(digits) != 44:
+        return None, None
+    serie = digits[22:25]
+    numero = format_invoice_number(digits[25:34])
+    return numero, serie
+
+
+def extract_access_key_candidate(text: str) -> Optional[str]:
+    if not text:
+        return None
+
+    candidates = []
+
+    label_match = re.search(r'Chave\s+de\s+Acesso', text, re.I)
+    if label_match:
+        segment = text[label_match.end():label_match.end() + 800]
+        digits_segment = only_digits(segment)
+        for start in range(0, max(0, len(digits_segment) - 43)):
+            candidate = digits_segment[start:start + 44]
+            if len(candidate) == 44:
+                candidates.append(candidate)
+
+    for match in re.finditer(DIGITS44, text):
+        candidates.append(match.group(0))
+
+    seen = set()
+    ordered = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+
+    for candidate in ordered:
+        if len(candidate) == 44 and candidate[20:22] == "55":
+            return candidate
+
+    for candidate in ordered:
+        if len(candidate) == 44:
+            return candidate
+
+    return None
+
+
+def extract_marketplace_order_info(text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    if not text:
+        return None, None, None
+
+    platform = None
+    pedido = None
+    order_number = None
+    text_upper = text.upper()
+    labeled_candidates = []
+
+    for regex in (XPED_LABEL_RE, PEDIDO_LABEL_RE):
+        for match in regex.finditer(text):
+            candidate = normalize_marketplace_order_token(match.group(1))
+            if candidate:
+                labeled_candidates.append(candidate)
+
+    best_classified = None
+    for candidate in labeled_candidates:
+        platform_candidate, order_candidate = classify_marketplace_order(candidate)
+        if not (platform_candidate and order_candidate):
+            continue
+        if best_classified is None or len(order_candidate) > len(best_classified[2]):
+            best_classified = (platform_candidate, candidate, order_candidate)
+
+    if best_classified:
+        platform, pedido, order_number = best_classified
+
+    if pedido is None and labeled_candidates:
+        pedido = max(labeled_candidates, key=len)
+
+    if order_number is None:
+        shopee_match = SHOPEE_PEDIDO_RE.search(text_upper)
+        if shopee_match:
+            token = normalize_marketplace_order_token(shopee_match.group(0))
+            platform_candidate, order_candidate = classify_marketplace_order(token)
+            if platform_candidate and order_candidate:
+                platform = platform or platform_candidate
+                pedido = pedido or token
+                order_number = order_candidate
+
+    if order_number is None:
+        ml_match = MERCADO_LIVRE_ORDER_RE.search(text_upper)
+        if ml_match:
+            token = normalize_marketplace_order_token(ml_match.group(0))
+            platform = platform or "Mercado Livre"
+            order_number = token
+            if pedido and normalize_marketplace_order_token(pedido) == token:
+                pedido = token
+
+    if platform is None:
+        if "SHOPEE" in text_upper:
+            platform = "Shopee"
+        elif any(term in text_upper for term in ("MERCADO LIVRE", "MERCADOLIVRE", "MELI")):
+            platform = "Mercado Livre"
+
+    if pedido and order_number is None:
+        order_number = pedido
+
+    return platform, pedido, order_number
 
 
 def clean_inline_value(v: Optional[str]) -> Optional[str]:
@@ -148,6 +289,7 @@ def parse_items_danfe_block(block: str) -> List[Item]:
 
     def is_noise_line(s: str) -> bool:
         s_up = s.upper()
+        normalized = normalize_marketplace_order_token(s_up.rstrip(')'))
         return (
             s_up.startswith('XPED:') or
             'TOTAL APROXIMADO DE TRIBUTOS' in s_up or
@@ -161,7 +303,8 @@ def parse_items_danfe_block(block: str) -> List[Item]:
             s_up.startswith('VICMS') or
             s_up.startswith('PREDBC=') or
             'PEDIDO' in s_up or
-            re.fullmatch(r'\(?PEDIDO\s+\d+\)?', s_up) is not None or
+            re.fullmatch(r'\(?PEDIDO(?:\s*:\s*)?[A-Z0-9]+\)?', s_up) is not None or
+            (normalized is not None and is_marketplace_order_token(normalized)) or
             re.fullmatch(r'\d+\)?', s_up) is not None
         )
 
@@ -286,8 +429,7 @@ def parse_mashed_items(block: str) -> List[Item]:
 
         # Clean head of noise
         head = re.sub(r'(?i)(?:pFCPUFDest|pICMSUFDest|pICMSInterPart|vFCPUFDest|vICMSUFDest|vICMSUFRemet|vTotTrib)\s*=\s*[\d\.,%]*', '', head)
-        head = re.sub(r'(?i)\(Pedido\s+\d+\)', '', head)
-        head = re.sub(r'(?i)Pedido\s*:\s*\d+', '', head)
+        head = PEDIDO_INLINE_RE.sub('', head)
         # Clean common header labels more aggressively (including mashed ones)
         header_terms = [
             r'C[OÓ]DIGO\s+PRODUTO', r'DESCRI[CÇ][AÃ]O\s+DO\s+PRODUTO\s*/\s*SERVI[CÇ]O',
@@ -373,14 +515,14 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
     else:
         inv.natureza_operacao = "未知 (Desconhecido)"
 
-    key_raw = get_after_label(r'Chave\s+de\s+Acesso', ACCESS_KEY_RE, text, 600) or \
-              (re.search(ACCESS_KEY_RE, text, re.S).group(1) if re.search(ACCESS_KEY_RE, text, re.S) else None)
-    if key_raw:
-        digits = only_digits(key_raw)
-        inv.chave_acesso = digits[:44] if len(digits) >= 44 else None
-    else:
-        m44 = re.search(DIGITS44, text)
-        if m44: inv.chave_acesso = m44.group(0)
+    inv.chave_acesso = extract_access_key_candidate(text)
+
+    derived_numero, derived_serie = derive_invoice_fields_from_access_key(inv.chave_acesso)
+    if not inv.numero and derived_numero:
+        inv.numero = derived_numero
+    serie_digits = only_digits(inv.serie or "")
+    if (not inv.serie or len(serie_digits) != 3) and derived_serie:
+        inv.serie = derived_serie
 
     inv.protocolo_autorizacao = get_after_label(r'Protocolo\s+de\s+autoriza[cç][aã]o', r'(\d{10,20})', text, 180)
 
@@ -819,6 +961,11 @@ def parse_invoice_from_text(text: str, file_name: str) -> Invoice:
             # If mashed found something and original was suspicious, prefer mashed
             # or if original found nothing, use mashed.
             itens = mashed
+
+    plataforma, pedido, numero_pedido = extract_marketplace_order_info(text)
+    inv.plataforma = plataforma
+    inv.pedido = pedido
+    inv.numero_pedido = numero_pedido
 
     inv.emitente_nome = strip_cnpj_cpf(inv.emitente_nome)
     inv.destinatario_nome = strip_cnpj_cpf(inv.destinatario_nome)
